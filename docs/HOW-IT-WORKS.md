@@ -72,7 +72,7 @@ Every 30 min (`MANGARR_SYNC_MINUTES`) each monitored series is checked again for
 | `DELETE /series/:id?deleteFiles=true` | remove (the folder too if asked) |
 | `POST /series/:id/refresh` | check that series now |
 | `GET /series/:id/candidates` | search results on every enabled source, for Change Source |
-| `GET /series/:id/chapters` | `{number, name, file, onDisk, imported}` |
+| `GET /series/:id/chapters` | `{number, name, file, onDisk, wanted, imported}`. `?all=true` adds the chapters the source has before the start chapter (`wanted: false`); lowering the start chapter gets them |
 | `GET /series/:id/chapters/:n/pages` · `/pages/:p` | page count · page image |
 | `GET /queue` · `GET /history` · `GET /wanted` | downloads in progress · imports · missing chapters |
 | `GET /sources` · `PUT /sources {ids}` | enabled sources in priority order · set them |
