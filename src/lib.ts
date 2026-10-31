@@ -16,16 +16,58 @@ export function bestMatch<T extends { title: string }>(results: T[], titles: str
   return results.find((r) => wanted.has(norm(r.title))) ?? null;
 }
 
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
 /**
- * Which remote chapters to download: numbered, at or after the start chapter, not on disk yet,
- * one per chapter number (the first one listed wins, so a second scanlation isn't downloaded too).
+ * Give every chapter a number. Sources report chapters they can't number (oneshots, extras, side stories) as -1:
+ * those get the number of the chapter before them plus .01 per extra (an extra after chapter 12 becomes 12.01,
+ * a second one 12.02), so they sort in reading order and Mihon/Suwayomi read the same number back from the file
+ * name. A title with no numbered chapter at all (a oneshot) is simply 1, 2, ...
+ * shortcut: a new extra inserted before an older one in the same gap shifts its number; fine for how rare that is.
  */
-export function pickWanted<C extends { chapterNumber: number }>(remote: C[], onDisk: Set<number>, start: number): C[] {
+export function numberChapters<C extends { chapterNumber: number; sourceOrder: number; name?: string }>(remote: C[]): (C & { number: number })[] {
+  const ordered = [...remote].sort((a, b) => a.sourceOrder - b.sourceOrder);
+  const numbered = ordered.filter((c) => c.chapterNumber >= 0);
+  // Reading order: some sources list newest first.
+  if (numbered.length > 1 && numbered[0].chapterNumber > numbered[numbered.length - 1].chapterNumber) ordered.reverse();
+  if (!numbered.length) {
+    // Two scanlations of one oneshot (same name) are one chapter.
+    const byName = new Map<string, number>();
+    return ordered.map((c) => {
+      const key = c.name || `#${c.sourceOrder}`;
+      if (!byName.has(key)) byName.set(key, byName.size + 1);
+      return { ...c, number: byName.get(key)! };
+    });
+  }
+  const taken = new Set(numbered.map((c) => round2(c.chapterNumber)));
+  let prev = 0;
+  // The same extra from two scanlators (same name, same gap) gets one number, so only one is downloaded.
+  let gap = new Map<string, number>();
+  return ordered.map((c) => {
+    if (c.chapterNumber >= 0) {
+      gap = new Map();
+      return { ...c, number: (prev = round2(c.chapterNumber)) };
+    }
+    const same = c.name ? gap.get(c.name) : undefined;
+    if (same !== undefined) return { ...c, number: same };
+    let n = round2(prev + 0.01);
+    while (taken.has(n)) n = round2(n + 0.01);
+    taken.add(n);
+    if (c.name) gap.set(c.name, n);
+    prev = n;
+    return { ...c, number: n };
+  });
+}
+
+/**
+ * Which chapters to download: at or after the start chapter, not on disk yet, one per chapter number (the first
+ * one listed wins, so a second scanlation isn't downloaded too). Run numberChapters first.
+ */
+export function pickWanted<C extends { number: number }>(remote: C[], onDisk: Set<number>, start: number): C[] {
   const seen = new Set<number>();
   return remote.filter((c) => {
-    const n = c.chapterNumber;
-    // shortcut: unnumbered chapters (-1: oneshots, extras) are skipped; add a name-based rule if they matter.
-    if (!(n >= 0) || n < start || onDisk.has(n) || seen.has(n)) return false;
+    const n = c.number;
+    if (n < start || onDisk.has(n) || seen.has(n)) return false;
     seen.add(n);
     return true;
   });

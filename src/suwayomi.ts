@@ -32,6 +32,7 @@ export interface RemoteManga {
 export interface RemoteChapter {
   id: number;
   chapterNumber: number;
+  sourceOrder: number;
   name: string;
   scanlator: string | null;
   isDownloaded: boolean;
@@ -109,7 +110,7 @@ export async function search(sourceId: string, query: string) {
 /** Asks the source for the current chapter list. */
 export async function fetchChapters(mangaId: number) {
   const r = await gql<{ fetchMangaAndChapters: { chapters: RemoteChapter[] } }>(
-    `mutation ($id: Int!) { fetchMangaAndChapters(input: { id: $id, fetchManga: false, fetchChapters: true }) { chapters { id chapterNumber name scanlator isDownloaded } } }`,
+    `mutation ($id: Int!) { fetchMangaAndChapters(input: { id: $id, fetchManga: false, fetchChapters: true }) { chapters { id chapterNumber sourceOrder name scanlator isDownloaded } } }`,
     { id: mangaId },
   );
   return r.fetchMangaAndChapters.chapters;
@@ -118,7 +119,7 @@ export async function fetchChapters(mangaId: number) {
 /** Chapters as Suwayomi already knows them (no request to the source). */
 export async function knownChapters(mangaId: number) {
   const r = await gql<{ chapters: { nodes: RemoteChapter[] } }>(
-    `query ($id: Int!) { chapters(condition: { mangaId: $id }) { nodes { id chapterNumber name scanlator isDownloaded } } }`,
+    `query ($id: Int!) { chapters(condition: { mangaId: $id }) { nodes { id chapterNumber sourceOrder name scanlator isDownloaded } } }`,
     { id: mangaId },
   );
   return r.chapters.nodes;
@@ -127,7 +128,7 @@ export async function knownChapters(mangaId: number) {
 export async function chaptersById(ids: number[]) {
   if (!ids.length) return [];
   const r = await gql<{ chapters: { nodes: (RemoteChapter & { mangaId: number; manga: { title: string; source: { displayName: string } | null } })[] } }>(
-    `query ($ids: [Int!]) { chapters(filter: { id: { in: $ids } }) { nodes { id mangaId chapterNumber name scanlator isDownloaded manga { title source { displayName } } } } }`,
+    `query ($ids: [Int!]) { chapters(filter: { id: { in: $ids } }) { nodes { id mangaId chapterNumber sourceOrder name scanlator isDownloaded manga { title source { displayName } } } } }`,
     { ids },
   );
   return r.chapters.nodes;

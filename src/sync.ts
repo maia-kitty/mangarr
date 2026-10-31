@@ -3,13 +3,25 @@ import { join, resolve, sep } from "node:path";
 import * as anilist from "./anilist.ts";
 import * as suwa from "./suwayomi.ts";
 import { allSeries, chaptersOf, config, db, enabledSources, getSeries, log, patchSeries, type Series } from "./db.ts";
-import { bestMatch, chapterFile, loose, pickWanted, safeFolder } from "./lib.ts";
+import { bestMatch, chapterFile, loose, numberChapters, pickWanted, safeFolder } from "./lib.ts";
 
 const DAY = 86_400;
 const now = () => Math.floor(Date.now() / 1000);
 const titlesOf = (s: Series) => JSON.parse(s.titles) as string[];
 
 export const status = { lastSync: 0, syncing: false };
+
+/**
+ * One thing at a time per series: a sync still reading the old source must not write its chapters after a source
+ * change (or a second sync) has moved on. Each call waits for the one before it on the same series.
+ */
+const busy = new Map<number, Promise<unknown>>();
+function serial<T>(anilistId: number, fn: () => Promise<T>): Promise<T> {
+  const run = (busy.get(anilistId) ?? Promise.resolve()).catch(() => {}).then(fn);
+  busy.set(anilistId, run);
+  void run.catch(() => {}).finally(() => busy.get(anilistId) === run && busy.delete(anilistId));
+  return run;
+}
 
 /** Add a series by AniList id. Matching and the first download happen in the background. */
 export async function addSeries(anilistId: number, startChapter = 0) {
@@ -42,7 +54,9 @@ export async function addSeries(anilistId: number, startChapter = 0) {
   return getSeries(anilistId)!;
 }
 
-export async function deleteSeries(anilistId: number, deleteFiles: boolean) {
+export const deleteSeries = (anilistId: number, deleteFiles: boolean) => serial(anilistId, () => removeSeries(anilistId, deleteFiles));
+
+async function removeSeries(anilistId: number, deleteFiles: boolean) {
   const s = getSeries(anilistId);
   if (!s) throw new HttpError(404, "No such series");
   const queued = chaptersOf(anilistId).filter((c) => !c.file && c.remote_chapter_id).map((c) => c.remote_chapter_id!);
@@ -73,6 +87,11 @@ async function match(s: Series, skip: Set<string> = new Set()) {
         log(`${s.title}: search on ${src.name} failed: ${e.message}`);
         return null;
       });
+      // A source can list a title with no chapters (MangaDex does for licensed series, and says so with an error): keep looking.
+      if (hit && !(await suwa.fetchChapters(hit.id).catch(() => [])).length) {
+        log(`${s.title}: ${src.name} has it but lists no chapters, trying the next source`);
+        break;
+      }
       if (hit) {
         patchSeries(s.anilist_id, { source_id: src.id, remote_id: hit.id, state: "ok", error: null, error_since: null });
         log(`${s.title}: matched on ${src.name} ("${hit.title}")`);
@@ -109,18 +128,25 @@ export async function candidates(anilistId: number) {
 
 /** Point a series at another source manga. Wanted chapters are re-picked from it; files on disk stay. */
 export async function changeSource(anilistId: number, sourceId: string, remoteId: number) {
+  if (!getSeries(anilistId)) throw new HttpError(404, "No such series");
+  await serial(anilistId, () => switchSource(anilistId, sourceId, remoteId));
+  void syncSeries(anilistId).catch((e) => log(`${getSeries(anilistId)?.title}: ${e.message}`));
+}
+
+async function switchSource(anilistId: number, sourceId: string, remoteId: number) {
   const s = getSeries(anilistId);
-  if (!s) throw new HttpError(404, "No such series");
+  if (!s) return;
   const pending = chaptersOf(anilistId).filter((c) => !c.file && c.remote_chapter_id).map((c) => c.remote_chapter_id!);
   await Promise.resolve(suwa.dequeue(pending)).catch(() => {});
   db.prepare("DELETE FROM chapters WHERE anilist_id = ? AND file IS NULL").run(anilistId);
   patchSeries(anilistId, { source_id: sourceId, remote_id: remoteId, state: "ok", error: null, error_since: null });
   log(`${s.title}: source changed by hand`);
-  void syncSeries(anilistId).catch((e) => log(`${s.title}: ${e.message}`));
 }
 
 /** Check one series: match if needed, list chapters, queue the wanted ones. */
-export async function syncSeries(anilistId: number) {
+export const syncSeries = (anilistId: number): Promise<void> => serial(anilistId, () => checkSeries(anilistId));
+
+async function checkSeries(anilistId: number): Promise<void> {
   let s = getSeries(anilistId);
   if (!s || !s.monitored) return;
   if (!s.remote_id) {
@@ -130,7 +156,16 @@ export async function syncSeries(anilistId: number) {
   let remote;
   try {
     remote = await suwa.fetchChapters(s.remote_id!);
+    if (!remote.length) throw new Error("No chapters found");
   } catch (e) {
+    // The source still has the title but no chapters any more (taken down, licensed): move on now, not in a day.
+    if (/no chapters found/i.test((e as Error).message)) {
+      const name = (db.prepare("SELECT name FROM sources WHERE id = ?").get(s.source_id) as { name: string } | undefined)?.name ?? s.source_id;
+      log(`${s.title}: ${name} lists no chapters any more, trying the next source`);
+      db.prepare("DELETE FROM chapters WHERE anilist_id = ? AND file IS NULL").run(anilistId);
+      if (await match(s, new Set([s.source_id!]))) return checkSeries(anilistId);
+      return;
+    }
     const since = s.error_since ?? now();
     patchSeries(anilistId, { state: "error", error: (e as Error).message, error_since: since, checked_at: now() });
     log(`${s.title}: chapter list failed: ${(e as Error).message}`);
@@ -143,13 +178,13 @@ export async function syncSeries(anilistId: number) {
   }
   const have = chaptersOf(anilistId);
   const onDisk = new Set(have.filter((c) => c.file).map((c) => c.number));
-  const wanted = pickWanted(remote, onDisk, s.start_chapter);
+  const wanted = pickWanted(numberChapters(remote), onDisk, s.start_chapter);
   const upsert = db.prepare(
     `INSERT INTO chapters (anilist_id, number, name, source_id, remote_chapter_id) VALUES (?, ?, ?, ?, ?)
      ON CONFLICT (anilist_id, number) DO UPDATE SET name = excluded.name, source_id = excluded.source_id, remote_chapter_id = excluded.remote_chapter_id
      WHERE file IS NULL`,
   );
-  for (const c of wanted) upsert.run(anilistId, c.chapterNumber, c.name, s.source_id, c.id);
+  for (const c of wanted) upsert.run(anilistId, c.number, c.name, s.source_id, c.id);
   // Wanted rows from an earlier start chapter that's since been raised.
   db.prepare("DELETE FROM chapters WHERE anilist_id = ? AND file IS NULL AND number < ?").run(anilistId, s.start_chapter);
   patchSeries(anilistId, { state: "ok", error: null, error_since: null, checked_at: now() });
@@ -199,7 +234,11 @@ export async function importDownloaded() {
         const file = chapterFile(s.folder, row.number);
         await move(src, join(dir, file));
         await suwa.forgetDownloads([c.id]);
-        db.prepare("UPDATE chapters SET file = ?, imported_at = ? WHERE anilist_id = ? AND number = ?").run(file, now(), s.anilist_id, row.number);
+        // Upsert: a source change may have cleared the wanted row while this was downloading.
+        db.prepare(
+          `INSERT INTO chapters (anilist_id, number, name, file, imported_at) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (anilist_id, number) DO UPDATE SET file = excluded.file, imported_at = excluded.imported_at`,
+        ).run(s.anilist_id, row.number, c.name, file, now());
         log(`${s.title}: imported ${file}`);
         touched.add(s.anilist_id);
       } catch (e) {

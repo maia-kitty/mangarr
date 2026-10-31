@@ -30,6 +30,7 @@ npm run typecheck
 npm run dev            # needs a Suwayomi on 127.0.0.1:4567 that sees ./dev/ at the same path
 ```
 
-## Planned
-- **AniList reading progress from Jellyshelf**: Jellyshelf's reader marks chapters read on AniList, plus "Continue reading". That lives in Jellyshelf, not here
-- Unnumbered chapters (oneshots/extras with no chapter number) are skipped for now
+## Notes
+- **Decimal chapters, extras, oneshots** all download. Unnumbered extras are numbered after the chapter before them (12.01, 12.02…), a oneshot is chapter 1
+- **AniList reading progress** comes from Jellyshelf's reader (it moves your AniList progress at the end of each chapter, plus "Continue reading"), not from here
+- **Cloudflare:** the common Cloudflare-fronted sources worked without help in testing. If one starts failing, point `FLARESOLVERR_URL` at a Byparr/FlareSolverr
