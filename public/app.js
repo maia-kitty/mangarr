@@ -119,10 +119,12 @@ pages.series = async () => {
 };
 
 pages.detail = async (id) => {
-  const [s, chapters, queue] = await Promise.all([api(`/series/${id}`), api(`/series/${id}/chapters`), api("/queue").catch(() => ({ items: [] }))]);
+  // "Show unrequested": also the chapters the source has before the start chapter (remembered per browser).
+  const all = localStorage.showUnrequested === "1";
+  const [s, chapters, queue] = await Promise.all([api(`/series/${id}`), api(`/series/${id}/chapters${all ? "?all=true" : ""}`), api("/queue").catch(() => ({ items: [] }))]);
   const q = new Map(queue.items.filter((i) => i.anilistId === s.anilistId).map((i) => [i.chapter, i]));
   page.innerHTML = `<div class="toolbar">${tb("t-refresh", "⟳", "Refresh")}${tb("t-edit", "✎", "Edit")}${tb("t-source", "⇄", "Change Source")}
-      <span class="spacer"></span>${tb("t-delete", "🗑", "Delete")}</div>
+      ${tb("t-all", "☰", all ? "Hide Unrequested" : "Show Unrequested", all)}<span class="spacer"></span>${tb("t-delete", "🗑", "Delete")}</div>
     <section class="hero"><div class="bg" style="background-image:url('${esc(s.banner ?? s.cover ?? "")}')"></div>
       <img src="${esc(s.cover ?? "")}" alt="">
       <div class="info">
@@ -146,6 +148,7 @@ pages.detail = async (id) => {
             .map((c) => {
               const d = q.get(c.number);
               const st = c.onDisk ? `<span class="label green">On disk</span>`
+                : !c.wanted ? `<span class="label">Not requested</span> <button class="btn small" data-from="${c.number}" title="Download every chapter from this one on">Get from here</button>`
                 : d ? (d.state === "DOWNLOADING" ? `<div class="bar purple thin" title="${Math.round(d.progress * 100)}%"><i style="width:${d.progress * 100}%"></i></div>` : `<span class="label purple">${d.state === "ERROR" ? "Error" : "Queued"}</span>`)
                 : `<span class="label ${s.monitored ? "red" : "orange"}">Missing</span>`;
               return `<tr><td class="num">${fmtCh(c.number)}</td><td>${esc(c.name ?? "")}</td><td class="mono muted">${esc(c.file ?? "")}</td><td>${st}</td><td>${c.imported ? ago(c.imported) : ""}</td></tr>`;
@@ -154,6 +157,13 @@ pages.detail = async (id) => {
         : `<div class="empty">${s.state === "no_match" ? "No enabled source has this title. Try <b>Change Source</b>, or enable more sources in Settings." : "No chapters known yet. Refresh checks the source."}</div>`
     }</div></div>`;
 
+  $("#t-all").onclick = () => ((localStorage.showUnrequested = all ? "0" : "1"), pages.detail(id));
+  page.querySelector("table")?.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-from]");
+    if (!b) return;
+    b.disabled = true;
+    api(`/series/${id}`, { method: "PATCH", body: { startChapter: Number(b.dataset.from) } }).then(() => (toast(`Getting ${s.title} from chapter ${b.dataset.from}`), pages.detail(id)), fail);
+  });
   $("#mon").onclick = () => api(`/series/${id}`, { method: "PATCH", body: { monitored: !s.monitored } }).then(() => pages.detail(id), fail);
   $("#t-refresh").onclick = () => api(`/series/${id}/refresh`, { method: "POST" }).then(() => toast(`Checking ${s.title}`), fail);
   $("#t-edit").onclick = () =>

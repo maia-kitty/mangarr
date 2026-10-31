@@ -6,6 +6,7 @@ import { timingSafeEqual } from "node:crypto";
 import * as anilist from "./anilist.ts";
 import * as suwa from "./suwayomi.ts";
 import { allSeries, apiKey, chaptersOf, config, db, enabledSources, getSeries, log, patchSeries, recentLog, type Series } from "./db.ts";
+import { numberChapters } from "./lib.ts";
 import { addSeries, candidates, changeSource, deleteSeries, HttpError, importDownloaded, status, syncAll, syncSeries } from "./sync.ts";
 
 const VERSION = "0.1.0";
@@ -192,16 +193,33 @@ route("POST", "/series/:id/refresh", async (_q, _r, [id]) => {
   return { ok: true };
 });
 route("GET", "/series/:id/candidates", async (_q, _r, [id]) => candidates(mustSeries(id).anilist_id));
-route("GET", "/series/:id/chapters", async (_q, _r, [id]) =>
-  chaptersOf(mustSeries(id).anilist_id).map((c) => ({
+/**
+ * The series' chapters: on disk and wanted. With ?all=true also the ones the source has that weren't asked for
+ * (before the start chapter), as `wanted: false`, from the chapter list Suwayomi already has (no request to the source).
+ */
+route("GET", "/series/:id/chapters", async (_q, _r, [id], url) => {
+  const s = mustSeries(id);
+  const rows = chaptersOf(s.anilist_id);
+  const out = rows.map((c) => ({
     number: c.number,
     name: c.name,
     file: c.file,
     onDisk: !!c.file,
+    wanted: true,
     imported: c.imported_at ? c.imported_at * 1000 : null,
     remoteChapterId: c.remote_chapter_id,
-  })),
-);
+  }));
+  if (url.searchParams.get("all") !== "true" || !s.remote_id) return out;
+  const have = new Set(rows.map((c) => c.number));
+  const known = new Map(rows.filter((c) => c.remote_chapter_id && c.source_id === s.source_id).map((c) => [c.remote_chapter_id!, c.number]));
+  const remote = numberChapters(await suwa.knownChapters(s.remote_id).catch(() => []), known);
+  const extra = new Map<number, (typeof out)[number]>();
+  for (const c of remote) {
+    if (have.has(c.number) || extra.has(c.number)) continue;
+    extra.set(c.number, { number: c.number, name: c.name, file: null, onDisk: false, wanted: false, imported: null, remoteChapterId: c.id });
+  }
+  return [...out, ...extra.values()].sort((a, b) => a.number - b.number);
+});
 route("GET", "/series/:id/chapters/:n/pages", async (_q, _r, [id, n]) => ({ count: (await chapterPages(mustSeries(id), Number(n))).length }));
 route("GET", "/series/:id/chapters/:n/pages/:p", async (_q, res, [id, n, p]) => {
   const pages = await chapterPages(mustSeries(id), Number(n));
