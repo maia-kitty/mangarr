@@ -25,7 +25,11 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
  * name. A title with no numbered chapter at all (a oneshot) is simply 1, 2, ...
  * shortcut: a new extra inserted before an older one in the same gap shifts its number; fine for how rare that is.
  */
-export function numberChapters<C extends { chapterNumber: number; sourceOrder: number; name?: string }>(remote: C[]): (C & { number: number })[] {
+export function numberChapters<C extends { id?: number; chapterNumber: number; sourceOrder: number; name?: string }>(
+  remote: C[],
+  /** Numbers given before, by remote chapter id: an extra keeps its number even if a new one appears before it. */
+  known: Map<number, number> = new Map(),
+): (C & { number: number })[] {
   const ordered = [...remote].sort((a, b) => a.sourceOrder - b.sourceOrder);
   const numbered = ordered.filter((c) => c.chapterNumber >= 0);
   // Reading order: some sources list newest first.
@@ -39,7 +43,7 @@ export function numberChapters<C extends { chapterNumber: number; sourceOrder: n
       return { ...c, number: byName.get(key)! };
     });
   }
-  const taken = new Set(numbered.map((c) => round2(c.chapterNumber)));
+  const taken = new Set([...numbered.map((c) => round2(c.chapterNumber)), ...known.values()]);
   let prev = 0;
   // The same extra from two scanlators (same name, same gap) gets one number, so only one is downloaded.
   let gap = new Map<string, number>();
@@ -47,6 +51,12 @@ export function numberChapters<C extends { chapterNumber: number; sourceOrder: n
     if (c.chapterNumber >= 0) {
       gap = new Map();
       return { ...c, number: (prev = round2(c.chapterNumber)) };
+    }
+    const before = c.id !== undefined ? known.get(c.id) : undefined;
+    if (before !== undefined) {
+      if (c.name) gap.set(c.name, before);
+      prev = Math.max(prev, before);
+      return { ...c, number: before };
     }
     const same = c.name ? gap.get(c.name) : undefined;
     if (same !== undefined) return { ...c, number: same };
@@ -58,6 +68,9 @@ export function numberChapters<C extends { chapterNumber: number; sourceOrder: n
     return { ...c, number: n };
   });
 }
+
+/** The highest real (source-numbered) chapter, or -1 when there's none. */
+export const latestNumbered = (remote: { chapterNumber: number }[]) => Math.max(-1, ...remote.map((c) => c.chapterNumber));
 
 /**
  * Which chapters to download: at or after the start chapter, not on disk yet, one per chapter number (the first

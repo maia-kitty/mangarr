@@ -77,6 +77,9 @@ CREATE TABLE IF NOT EXISTS sources (
 );
 PRAGMA foreign_keys = ON;
 `);
+// Columns added after the first release: ALTER the ones an older database lacks.
+const has = (table: string, col: string) => (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === col);
+if (!has("series", "compared_at")) db.exec("ALTER TABLE series ADD COLUMN compared_at INTEGER"); // last check against the other sources
 
 export interface Series {
   anilist_id: number;
@@ -100,6 +103,7 @@ export interface Series {
   error: string | null;
   error_since: number | null;
   checked_at: number | null;
+  compared_at: number | null;
   added_at: number;
 }
 export interface Chapter {

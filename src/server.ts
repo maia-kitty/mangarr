@@ -274,7 +274,10 @@ route("PUT", "/sources", async (req) => {
   return enabledSources();
 });
 /** Every source Suwayomi has installed, enabled or not. */
-route("GET", "/sources/installed", async () => suwa.sources());
+route("GET", "/sources/installed", async () =>
+  // "all" extensions (MangaDex) register one source per language: only offer the configured ones.
+  (await suwa.sources()).filter((s) => config.langs.includes("all") || config.langs.includes(s.lang) || s.lang === "all"),
+);
 route("GET", "/extensions", async () => {
   if (!extCache || Date.now() - extCache.at > 3_600_000) extCache = { at: Date.now(), list: await suwa.extensions() };
   return extCache.list;

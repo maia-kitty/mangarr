@@ -40,6 +40,15 @@ test("numberChapters: the same extra from two scanlators shares a number", () =>
   assert.deepEqual(got, [5, 5.01, 5.01, 5.02]);
 });
 
+test("numberChapters: an extra keeps the number it was given, even when a new one appears before it", () => {
+  const ch = (id: number, chapterNumber: number, sourceOrder: number) => ({ id, chapterNumber, sourceOrder });
+  const first = numberChapters([ch(1, 1, 1), ch(3, -1, 2), ch(4, 2, 3)]).map((c) => c.number);
+  assert.deepEqual(first, [1, 1.01, 2]);
+  // Later a new extra (id 2) shows up before the known one (id 3): id 3 stays 1.01, the newcomer takes the next free number.
+  const later = numberChapters([ch(1, 1, 1), ch(2, -1, 2), ch(3, -1, 3), ch(4, 2, 4)], new Map([[3, 1.01]])).map((c) => c.number);
+  assert.deepEqual(later, [1, 1.02, 1.01, 2]);
+});
+
 test("numberChapters: an extra before chapter 1, and a oneshot with no numbers at all", () => {
   assert.deepEqual(nums([[-1, 1], [1, 2]]), [0.01, 1]);
   assert.deepEqual(nums([[-1, 1]]), [1]);

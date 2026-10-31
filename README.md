@@ -44,8 +44,9 @@ back between sources, "start from chapter N", and a clean library folder.
   A new series goes to the first source that has the exact title with chapters in it.
 - **Every kind of chapter:** decimal chapters (12.5), unnumbered extras (numbered after the chapter before them:
   12.01, 12.02…) and oneshots (chapter 1). The same chapter from two scanlators is downloaded once.
-- **Fallback:** a source that keeps failing for a day, or stops listing chapters, is swapped for the next one that
-  has the series. Chapters already on disk are never downloaded twice.
+- **Fallback:** a source that keeps failing for a day, stops listing chapters, or quietly falls behind the others
+  (checked every couple of days) is swapped for one that has the series. Chapters already on disk are never
+  downloaded twice.
 - **Clean library:** `<Series>/<Series> - Ch. 012.cbz` plus `cover.jpg` and `ComicInfo.xml`, moved (not copied) in
   from the download folder. Readable by Mihon's Local source, Suwayomi, Komga/Kavita-style readers and
   [Jellyshelf](https://github.com/maia-kitty/Jellyshelf).

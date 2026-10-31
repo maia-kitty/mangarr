@@ -45,6 +45,8 @@ Every 30 min (`MANGARR_SYNC_MINUTES`) each monitored series is checked again for
 - The order is the priority. It only matters when a series gets matched
 - **A source that fails** (chapter list errors) for over **24 h** is swapped for the next source that has the title. Chapters already on disk stay and aren't downloaded again; missing ones come from the new source
 - **A source that empties out** (still has the title, no chapters any more: taken down or licensed) is swapped right away
+- **A source that quietly falls behind:** every 2 days, a series still coming out (or a finished one that's missing chapters) is compared with the other enabled sources. If one has a newer chapter, the series moves there (the log says "MangaPill stops at 120, Weeb Central has 123")
+- **Change Source** (by hand or automatic) first imports whatever already finished downloading, then deletes what the old source left in Suwayomi's download folder. Empty download folders are cleared after each full check
 - Syncs, source changes and deletes of one series run one at a time, so a slow sync of the old source can't write its chapters after a source change
 - **Cloudflare:** tested 2026-10-31 from a home connection, Asura Scans, MangaFire, Toonily and Flame Comics all worked without help (search, chapters, full downloads). If a source starts showing Cloudflare errors, set `FLARESOLVERR_URL` (e.g. a Byparr/FlareSolverr at `http://byparr:8191`); mangarr turns it on in Suwayomi
 - **Change Source** on a series does the same by hand
@@ -92,10 +94,9 @@ Every 30 min (`MANGARR_SYNC_MINUTES`) each monitored series is checked again for
 | `public/` | the UI: `index.html`, `app.js` (plain JS, hash routes), `style.css` |
 
 ## Known limits
-- An extra's number depends on the chapter before it: a new extra slipped in *before* an older one in the same gap would shift numbers (rare)
+- An extra keeps the number it got first. A new extra that shows up *before* an older one in the same gap takes the next free number, so those two sort the wrong way round (nothing is downloaded twice)
 - Matching needs an exact title match, so a source that names a series differently needs **Change Source** once
-- Only chapter-list errors trigger the fallback. A source that silently stops getting new chapters doesn't
-- Suwayomi's download folders (`/data/downloads/manga/mangas/<source>/<title>/`) stay behind empty after the files are moved
+- The every-2-days comparison only looks at *other* sources: a second, more complete entry of the same series on the same source isn't found (Change Source can pick it)
 
 ## AniList reading progress
 Lives in Jellyshelf: its reader moves your AniList progress when you reach the end of a chapter (whole chapters: 12.5 counts as 12, extras before chapter 1 as nothing), and Discover has a "Continue reading" row. Mangarr needs nothing for it.

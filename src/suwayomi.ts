@@ -136,6 +136,20 @@ export async function chaptersById(ids: number[]) {
   return r.chapters.nodes;
 }
 
+/** A manga's title and source name: what its download folder is named after. */
+export async function mangaInfo(mangaId: number) {
+  const r = await gql<{ manga: { title: string; source: { displayName: string } | null } }>(
+    `query ($id: Int!) { manga(id: $id) { title source { displayName } } }`,
+    { id: mangaId },
+  );
+  return { title: r.manga.title, sourceName: r.manga.source?.displayName ?? "" };
+}
+
+/** Downloaded chapters Suwayomi still holds for a manga (mangarr moves finished ones out, so these are leftovers). */
+export async function leftoverDownloads(mangaId: number) {
+  return (await knownChapters(mangaId)).filter((c) => c.isDownloaded).map((c) => c.id);
+}
+
 export const enqueue = (ids: number[]) =>
   ids.length && gql(`mutation ($ids: [Int!]!) { enqueueChapterDownloads(input: { ids: $ids }) { clientMutationId } }`, { ids });
 export const dequeue = (ids: number[]) =>

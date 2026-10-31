@@ -1,9 +1,9 @@
-import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import * as anilist from "./anilist.ts";
 import * as suwa from "./suwayomi.ts";
 import { allSeries, chaptersOf, config, db, enabledSources, getSeries, log, patchSeries, type Series } from "./db.ts";
-import { bestMatch, chapterFile, loose, numberChapters, pickWanted, safeFolder } from "./lib.ts";
+import { bestMatch, chapterFile, latestNumbered, loose, numberChapters, pickWanted, safeFolder } from "./lib.ts";
 
 const DAY = 86_400;
 const now = () => Math.floor(Date.now() / 1000);
@@ -61,6 +61,7 @@ async function removeSeries(anilistId: number, deleteFiles: boolean) {
   if (!s) throw new HttpError(404, "No such series");
   const queued = chaptersOf(anilistId).filter((c) => !c.file && c.remote_chapter_id).map((c) => c.remote_chapter_id!);
   await Promise.resolve(suwa.dequeue(queued)).catch(() => {});
+  if (s.remote_id) await clearLeftovers(s.remote_id);
   if (s.local_id) await suwa.removeFromLibrary(s.local_id);
   db.prepare("DELETE FROM series WHERE anilist_id = ?").run(anilistId);
   if (deleteFiles) await rm(libraryPath(s.folder), { recursive: true, force: true });
@@ -133,14 +134,45 @@ export async function changeSource(anilistId: number, sourceId: string, remoteId
   void syncSeries(anilistId).catch((e) => log(`${getSeries(anilistId)?.title}: ${e.message}`));
 }
 
-async function switchSource(anilistId: number, sourceId: string, remoteId: number) {
+async function switchSource(anilistId: number, sourceId: string, remoteId: number, why?: string) {
   const s = getSeries(anilistId);
   if (!s) return;
   const pending = chaptersOf(anilistId).filter((c) => !c.file && c.remote_chapter_id).map((c) => c.remote_chapter_id!);
   await Promise.resolve(suwa.dequeue(pending)).catch(() => {});
+  // What already finished downloading is kept (imported); anything else the old source left behind goes.
+  await importDownloaded();
+  if (s.remote_id && s.remote_id !== remoteId) await clearLeftovers(s.remote_id);
   db.prepare("DELETE FROM chapters WHERE anilist_id = ? AND file IS NULL").run(anilistId);
   patchSeries(anilistId, { source_id: sourceId, remote_id: remoteId, state: "ok", error: null, error_since: null });
-  log(`${s.title}: source changed by hand`);
+  log(`${s.title}: source changed${why ? ` (${why})` : " by hand"}`);
+}
+
+/** Delete chapters Suwayomi downloaded for a manga that mangarr no longer wants, and its then-empty folders. */
+async function clearLeftovers(remoteId: number) {
+  const ids = await suwa.leftoverDownloads(remoteId).catch(() => []);
+  if (ids.length) await Promise.resolve(suwa.forgetDownloads(ids)).catch(() => {});
+  const info = await suwa.mangaInfo(remoteId).catch(() => null);
+  if (info) await removeEmptyDownloadDir(info.sourceName, info.title);
+}
+
+/** Empty folders left in Suwayomi's download folder. Only while nothing is downloading, so none is about to be used. */
+async function sweepDownloadDirs() {
+  if ((await suwa.queue()).queue.length) return;
+  const base = join(config.downloads, "mangas");
+  for (const src of await readdir(base).catch(() => [])) {
+    for (const title of await readdir(join(base, src)).catch(() => [])) await rmdir(join(base, src, title)).catch(() => {});
+    await rmdir(join(base, src)).catch(() => {});
+  }
+}
+
+/** <downloads>/mangas/<source>/<title> (and <source>) once nothing is left in them. rmdir refuses non-empty folders. */
+async function removeEmptyDownloadDir(source: string, title: string) {
+  const base = join(config.downloads, "mangas");
+  const srcDir = (await readdir(base).catch(() => [])).find((d) => loose(d) === loose(source));
+  if (!srcDir) return;
+  const titleDir = (await readdir(join(base, srcDir)).catch(() => [])).find((d) => loose(d) === loose(title));
+  if (titleDir) await rmdir(join(base, srcDir, titleDir)).catch(() => {});
+  await rmdir(join(base, srcDir)).catch(() => {});
 }
 
 /** Check one series: match if needed, list chapters, queue the wanted ones. */
@@ -176,9 +208,11 @@ async function checkSeries(anilistId: number): Promise<void> {
     }
     return;
   }
+  if (await behindOtherSources(s, remote)) return checkSeries(anilistId);
   const have = chaptersOf(anilistId);
   const onDisk = new Set(have.filter((c) => c.file).map((c) => c.number));
-  const wanted = pickWanted(numberChapters(remote), onDisk, s.start_chapter);
+  const known = new Map(have.filter((c) => c.remote_chapter_id && c.source_id === s.source_id).map((c) => [c.remote_chapter_id!, c.number]));
+  const wanted = pickWanted(numberChapters(remote, known), onDisk, s.start_chapter);
   const upsert = db.prepare(
     `INSERT INTO chapters (anilist_id, number, name, source_id, remote_chapter_id) VALUES (?, ?, ?, ?, ?)
      ON CONFLICT (anilist_id, number) DO UPDATE SET name = excluded.name, source_id = excluded.source_id, remote_chapter_id = excluded.remote_chapter_id
@@ -203,10 +237,41 @@ export async function syncAll() {
   status.syncing = true;
   try {
     for (const s of allSeries()) await syncSeries(s.anilist_id).catch((e) => log(`${s.title}: ${e.message}`));
+    await sweepDownloadDirs().catch(() => {});
     status.lastSync = Date.now();
   } finally {
     status.syncing = false;
   }
+}
+
+const COMPARE_EVERY = 2 * DAY;
+
+/**
+ * A source can quietly stop getting new chapters without erroring. Every couple of days, a series that's still
+ * coming out (or a finished one we don't have every chapter of) is compared against the other enabled sources;
+ * if one has a newer chapter, the series moves there. True when it moved.
+ */
+async function behindOtherSources(s: Series, remote: suwa.RemoteChapter[]) {
+  const ours = latestNumbered(remote);
+  const incomplete = s.anilist_status !== "FINISHED" || (s.total !== null && ours < s.total);
+  if (!incomplete || now() - (s.compared_at ?? s.added_at) < COMPARE_EVERY) return false;
+  patchSeries(s.anilist_id, { compared_at: now() });
+  const titles = titlesOf(s);
+  let best: { src: { id: string; name: string }; mangaId: number; latest: number } | null = null;
+  for (const src of enabledSources()) {
+    if (src.id === s.source_id) continue;
+    for (const q of titles.slice(0, 2)) {
+      const hit = await suwa.search(src.id, q).then((r) => bestMatch(r, titles)).catch(() => null);
+      if (!hit) continue;
+      const latest = latestNumbered(await suwa.fetchChapters(hit.id).catch(() => []));
+      if (latest > ours && latest > (best?.latest ?? -1)) best = { src, mangaId: hit.id, latest };
+      break;
+    }
+  }
+  if (!best) return false;
+  const ourName = enabledSources().find((x) => x.id === s.source_id)?.name ?? "the current source";
+  await switchSource(s.anilist_id, best.src.id, best.mangaId, `${ourName} stops at ${ours}, ${best.src.name} has ${best.latest}`);
+  return true;
 }
 
 let importing = false;
@@ -221,6 +286,7 @@ export async function importDownloaded() {
     if (!rows.length) return;
     const done = (await suwa.chaptersById(rows.map((r) => r.remote_chapter_id))).filter((c) => c.isDownloaded);
     const touched = new Set<number>();
+    const folders = new Map<number, { source: string; title: string }>();
     for (const c of done) {
       const row = rows.find((r) => r.remote_chapter_id === c.id)!;
       const s = getSeries(row.anilist_id);
@@ -241,12 +307,17 @@ export async function importDownloaded() {
         ).run(s.anilist_id, row.number, c.name, file, now());
         log(`${s.title}: imported ${file}`);
         touched.add(s.anilist_id);
+        folders.set(s.anilist_id, { source: c.manga.source?.displayName ?? "", title: c.manga.title });
       } catch (e) {
         log(`${s.title}: import of chapter ${row.number} failed: ${(e as Error).message}`);
       }
     }
     for (const id of touched) {
       const s = getSeries(id)!;
+      // Everything wanted is in: Suwayomi's (now empty) download folder for it can go.
+      const waiting = db.prepare("SELECT 1 FROM chapters WHERE anilist_id = ? AND file IS NULL LIMIT 1").get(id);
+      const dir = folders.get(id);
+      if (!waiting && dir) await removeEmptyDownloadDir(dir.source, dir.title);
       const localId = await suwa.refreshLocal(s.folder, s.local_id).catch((e) => {
         log(`${s.title}: Local source refresh failed: ${e.message}`);
         return s.local_id;
