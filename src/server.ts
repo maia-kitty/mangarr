@@ -282,7 +282,9 @@ route("GET", "/extensions", async () => {
 route("POST", "/extensions/install", async (req) => {
   const { pkgName } = await readBody(req);
   if (typeof pkgName !== "string" || !/^[\w.]+$/.test(pkgName)) throw new HttpError(400, "pkgName required");
-  const added = (await suwa.installExtension(pkgName)).filter((s) => config.langs.includes(s.lang) || config.langs.includes("all"));
+  const sources = await suwa.installExtension(pkgName);
+  if (!sources) throw new HttpError(404, `No extension ${pkgName} in the extension store`);
+  const added = sources.filter((s) => config.langs.includes(s.lang) || config.langs.includes("all"));
   extCache = null;
   const next = (db.prepare("SELECT COALESCE(MAX(priority) + 1, 0) AS p FROM sources").get() as { p: number }).p;
   const ins = db.prepare("INSERT OR IGNORE INTO sources (id, name, lang, icon, priority) VALUES (?, ?, ?, ?, ?)");

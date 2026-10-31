@@ -74,7 +74,9 @@ export async function setup() {
   const { extensionStores } = await gql<{ extensionStores: { nodes: { indexUrl: string }[] } }>(
     `{ extensionStores { nodes { indexUrl } } }`,
   );
-  if (!extensionStores.nodes.some((s) => s.indexUrl === config.extensionStore))
+  // Suwayomi 2.4+ ships with keiyoushi's store already (as index.pb); don't add it a second time.
+  const keiyoushi = (u: string) => u.includes("keiyoushi/extensions");
+  if (!extensionStores.nodes.some((s) => s.indexUrl === config.extensionStore || (keiyoushi(s.indexUrl) && keiyoushi(config.extensionStore))))
     await gql(`mutation ($u: String!) { addExtensionStore(input: { indexUrl: $u }) { clientMutationId } }`, {
       u: config.extensionStore,
     });
@@ -167,13 +169,20 @@ export async function extensions() {
   return r.fetchExtensions.extensions;
 }
 
-export async function installExtension(pkgName: string) {
-  const r = await gql<{ updateExtension: { extension: { source: { nodes: SuwaSource[] } } } }>(
-    `mutation ($p: String!) { updateExtension(input: { id: $p, patch: { install: true } }) { extension { source { nodes { id name lang displayName iconUrl } } } } }`,
-    { p: pkgName },
-    180_000,
-  );
-  return r.updateExtension.extension.source.nodes;
+export async function installExtension(pkgName: string): Promise<SuwaSource[] | null> {
+  const install = () =>
+    gql<{ updateExtension: { extension: { source: { nodes: SuwaSource[] } } | null } }>(
+      `mutation ($p: String!) { updateExtension(input: { id: $p, patch: { install: true } }) { extension { source { nodes { id name lang displayName iconUrl } } } } }`,
+      { p: pkgName },
+      180_000,
+    );
+  let r = await install();
+  // A fresh Suwayomi knows no extensions until the store's list has been fetched once.
+  if (!r.updateExtension.extension) {
+    await extensions();
+    r = await install();
+  }
+  return r.updateExtension.extension?.source.nodes ?? null;
 }
 
 /**
