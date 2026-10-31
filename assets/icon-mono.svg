@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <!-- the open book is a hole in the disc, so it reads on any background -->
+    <mask id="cut">
+      <rect width="64" height="64" fill="#fff"/>
+      <path d="M18 18h12a4 4 0 0 1 2 1 4 4 0 0 1 2-1h12v28H34a4 4 0 0 0-2 1 4 4 0 0 0-2-1H18z" fill="#000"/>
+      <path d="M32 20v26" stroke="#fff" stroke-width="2"/>
+    </mask>
+  </defs>
+  <circle cx="32" cy="32" r="30" fill="#000" mask="url(#cut)"/>
+</svg>
