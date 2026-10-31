@@ -15,7 +15,7 @@ How it works, the folder layout, reading on Mihon and the API: [docs/HOW-IT-WORK
 
 ## Run
 ```sh
-git clone <this repo> mangarr
+git clone https://github.com/maia-kitty/mangarr.git mangarr
 cp mangarr/compose.example.yaml compose.yaml   # edit paths + password
 docker compose up -d --build
 ```
