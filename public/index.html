@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mangarr</title>
+  <link rel="icon" href="logo.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <button class="burger" id="burger" aria-label="Menu">☰</button>
+    <a class="brand" href="#/"><img src="logo.svg" alt="" width="32" height="32"><span>Mangarr</span></a>
+    <input id="search" class="search" type="search" placeholder="Search" aria-label="Search series" autocomplete="off">
+  </header>
+  <nav class="sidebar" id="sidebar">
+    <a href="#/" data-nav="series"><svg viewBox="0 0 24 24"><path d="M4 4h7v16H4zM13 4h7v16h-7z"/></svg>Series</a>
+    <div class="sub" data-sub="series"><a href="#/add">Add New</a></div>
+    <a href="#/activity/queue" data-nav="activity"><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Activity</a>
+    <div class="sub" data-sub="activity"><a href="#/activity/queue">Queue</a><a href="#/activity/history">History</a></div>
+    <a href="#/wanted" data-nav="wanted"><svg viewBox="0 0 24 24"><path d="M12 3l9 16H3zM12 10v4M12 17v.5"/></svg>Wanted</a>
+    <a href="#/settings/sources" data-nav="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg>Settings</a>
+    <div class="sub" data-sub="settings"><a href="#/settings/sources">Sources</a><a href="#/settings/general">General</a></div>
+    <a href="#/system/status" data-nav="system"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="1"/><path d="M8 20h8M12 16v4"/></svg>System</a>
+    <div class="sub" data-sub="system"><a href="#/system/status">Status</a><a href="#/system/logs">Logs</a></div>
+  </nav>
+  <main id="page"></main>
+  <div id="modal" class="modal" hidden></div>
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

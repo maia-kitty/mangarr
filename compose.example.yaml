@@ -1,0 +1,44 @@
+# Mangarr + Suwayomi. Both containers MUST see the media disk at the same path (/data here):
+# Suwayomi downloads into /data/downloads/manga and mangarr moves the files to /data/media/manga
+# (same filesystem, so the move is instant and there's only ever one copy).
+services:
+  suwayomi:
+    image: ghcr.io/suwayomi/suwayomi-server:stable
+    container_name: suwayomi
+    environment:
+      TZ: Etc/UTC
+      DOWNLOAD_AS_CBZ: "true"
+      AUTO_DOWNLOAD_CHAPTERS: "false"   # mangarr decides what gets downloaded
+      AUTH_MODE: basic_auth             # the port is open for Mihon, so it needs a password
+      AUTH_USERNAME: admin
+      AUTH_PASSWORD: change-me
+      WEB_UI_ENABLED: "false"           # mangarr is the UI; Suwayomi only serves Mihon + mangarr
+    volumes:
+      - ./suwayomi:/home/suwayomi/.local/share/Tachidesk
+      - /mnt/hdd1:/data
+    ports:
+      - 8207:4567
+    restart: unless-stopped
+
+  mangarr:
+    build: ./mangarr                    # git clone of this repo
+    container_name: mangarr
+    user: "1000:1000"
+    environment:
+      TZ: Etc/UTC
+      SUWAYOMI_URL: http://suwayomi:4567
+      SUWAYOMI_USER: admin
+      SUWAYOMI_PASS: change-me
+      MANGARR_LIBRARY: /data/media/manga
+      MANGARR_DOWNLOADS: /data/downloads/manga
+      # FLARESOLVERR_URL: http://byparr:8191   # optional, for Cloudflare-protected sources
+      # MANGARR_LANGS: en                      # source languages taken from "all" extensions
+      # MANGARR_SYNC_MINUTES: "30"
+      # MANGARR_LOCAL_CIDRS: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,127.0.0.0/8,::1/128,fc00::/7
+    volumes:
+      - ./mangarr-config:/config
+      - /mnt/hdd1:/data
+    ports:
+      - 8206:8206
+    depends_on: [suwayomi]
+    restart: unless-stopped
