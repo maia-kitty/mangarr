@@ -88,6 +88,7 @@ The login (Sonarr's "Forms" authentication):
 | `GET /series/:id/candidates` | search results on every enabled source, for Change Source |
 | `GET /series/:id/chapters` | `{number, name, file, onDisk, wanted, imported}`. `?all=true` adds the chapters the source has outside the wanted ranges (`wanted: false`); `addRange` gets them |
 | `GET /series/:id/chapters/:n/pages` · `/pages/:p` | page count · page image |
+| `GET /series/:id/chapters/:n/file` | the chapter's CBZ as it is on disk (the Jellyshelf Android app downloads these to read offline) |
 | `GET /queue` · `GET /history` · `GET /wanted` | downloads in progress · imports · missing chapters |
 | `GET /sources` · `PUT /sources {ids}` | enabled sources in priority order · set them |
 | `GET /sources/installed` · `GET /extensions` · `POST /extensions/install {pkgName}` | Suwayomi's sources · keiyoushi extension list · install |

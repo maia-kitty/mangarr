@@ -69,7 +69,7 @@ async function removeSeries(anilistId: number, deleteFiles: boolean) {
 }
 
 /** A folder inside the library root, refusing anything that would point outside it. */
-function libraryPath(folder: string) {
+export function libraryPath(folder: string) {
   const root = resolve(config.library);
   const p = resolve(root, folder);
   if (!p.startsWith(root + sep)) throw new Error(`Refusing path outside the library: ${folder}`);

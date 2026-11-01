@@ -1,6 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { BlockList, isIPv4 } from "node:net";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import { timingSafeEqual } from "node:crypto";
 import * as anilist from "./anilist.ts";
@@ -8,7 +10,7 @@ import * as suwa from "./suwayomi.ts";
 import * as auth from "./auth.ts";
 import { allSeries, apiKey, chaptersOf, config, db, enabledSources, getSeries, log, patchSeries, recentLog, type Series } from "./db.ts";
 import { mergeRanges, numberChapters, type Range } from "./lib.ts";
-import { addSeries, candidates, changeSource, deleteSeries, HttpError, importDownloaded, status, syncAll, syncSeries } from "./sync.ts";
+import { addSeries, candidates, changeSource, deleteSeries, HttpError, importDownloaded, libraryPath, status, syncAll, syncSeries } from "./sync.ts";
 
 const VERSION = "0.1.0";
 
@@ -342,6 +344,16 @@ route("GET", "/series/:id/chapters", async (_q, _r, [id], url) => {
     extra.set(c.number, { number: c.number, name: c.name, file: null, onDisk: false, wanted: false, imported: null, remoteChapterId: c.id });
   }
   return [...out, ...extra.values()].sort((a, b) => a.number - b.number);
+});
+/** A chapter's CBZ as it is on disk: what the Android app downloads to read offline. */
+route("GET", "/series/:id/chapters/:n/file", async (_q, res, [id, n]) => {
+  const s = mustSeries(id);
+  const c = chaptersOf(s.anilist_id).find((c) => c.number === Number(n) && c.file);
+  const path = c && join(libraryPath(s.folder), c.file!);
+  const st = path && (await stat(path).catch(() => null));
+  if (!path || !st) throw new HttpError(404, "Chapter isn't on disk");
+  res.writeHead(200, { "Content-Type": "application/vnd.comicbook+zip", "Content-Length": st.size, "Cache-Control": "private, no-store" });
+  createReadStream(path).pipe(res);
 });
 route("GET", "/series/:id/chapters/:n/pages", async (_q, _r, [id, n]) => ({ count: (await chapterPages(mustSeries(id), Number(n))).length }));
 route("GET", "/series/:id/chapters/:n/pages/:p", async (_q, res, [id, n, p]) => {
