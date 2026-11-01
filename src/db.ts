@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS series (
   anilist_status TEXT,                  -- RELEASING, FINISHED, ...
   total         INTEGER,                -- AniList chapter count (null while releasing)
   folder        TEXT NOT NULL,
-  start_chapter REAL NOT NULL DEFAULT 0,
+  ranges        TEXT NOT NULL DEFAULT '[[0,null]]', -- json [[from, to|null], ...]: the chapters wanted; to null = keep following new ones
   monitored     INTEGER NOT NULL DEFAULT 1,
   source_id     TEXT,
   remote_id     INTEGER,                -- Suwayomi manga id on source_id
@@ -80,7 +80,12 @@ PRAGMA foreign_keys = ON;
 // Columns added after the first release: ALTER the ones an older database lacks.
 const has = (table: string, col: string) => (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === col);
 if (!has("series", "compared_at")) db.exec("ALTER TABLE series ADD COLUMN compared_at INTEGER"); // last check against the other sources
-if (!has("series", "end_chapter")) db.exec("ALTER TABLE series ADD COLUMN end_chapter REAL"); // last chapter wanted; null = keep following new ones
+// Before ranges: one start (and later end) chapter per series.
+if (!has("series", "ranges")) {
+  db.exec("ALTER TABLE series ADD COLUMN ranges TEXT NOT NULL DEFAULT '[[0,null]]'");
+  db.exec(`UPDATE series SET ranges = json_array(json_array(start_chapter, ${has("series", "end_chapter") ? "end_chapter" : "NULL"}))`);
+}
+for (const old of ["start_chapter", "end_chapter"]) if (has("series", old)) db.exec(`ALTER TABLE series DROP COLUMN ${old}`);
 
 export interface Series {
   anilist_id: number;
@@ -95,8 +100,8 @@ export interface Series {
   anilist_status: string | null;
   total: number | null;
   folder: string;
-  start_chapter: number;
-  end_chapter: number | null;
+  /** json Range[] */
+  ranges: string;
   monitored: number;
   source_id: string | null;
   remote_id: number | null;

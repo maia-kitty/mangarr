@@ -18,6 +18,21 @@ const ago = (ms) => {
   if (s < 86400) return `${Math.round(s / 3600)} h ago`;
   return new Date(ms).toLocaleDateString();
 };
+// Wanted chapter ranges as text, both ways: "1–10, 50–60, 100–" (an open end keeps following new chapters).
+const rangesText = (rs) => rs.map((r) => (r.to == null ? `${r.from}–` : r.from === r.to ? `${r.from}` : `${r.from}–${r.to}`)).join(", ");
+const rangesLabel = (rs) =>
+  rs.map((r) => (r.to == null ? (r.from ? `from ${r.from}` : "every chapter") : r.from === r.to ? `${r.from}` : `${r.from || 1}–${r.to}`)).join(", ");
+function parseRanges(text) {
+  const parts = text.split(",").map((p) => p.trim()).filter(Boolean);
+  if (!parts.length) throw new Error("Give at least one range, e.g. 0– for every chapter");
+  return parts.map((p) => {
+    const m = /^(\d+(?:\.\d+)?)?\s*(?:([-–])\s*(\d+(?:\.\d+)?)?)?$/.exec(p);
+    if (!m || (m[1] === undefined && m[3] === undefined)) throw new Error(`Can't read "${p}": use 1–10, 50, or 100–`);
+    const from = Number(m[1] ?? 0);
+    const to = m[2] ? (m[3] === undefined ? null : Number(m[3])) : from;
+    return { from, to };
+  });
+}
 const STATUS = { RELEASING: "Continuing", FINISHED: "Ended", HIATUS: "Hiatus", CANCELLED: "Cancelled", NOT_YET_RELEASED: "Upcoming" };
 
 async function api(path, opts = {}) {
@@ -136,7 +151,7 @@ pages.detail = async (id) => {
           <span class="chip"><b>Path</b>${esc(s.path)}</span>
           <span class="chip"><b>Source</b>${esc(s.sourceName ?? "none")}</span>
           <span class="chip"><b>Chapters</b>${s.chaptersOnDisk} on disk${s.chaptersMissing ? `, ${s.chaptersMissing} missing` : ""}${s.totalChapters ? ` (AniList: ${s.totalChapters})` : ""}</span>
-          <span class="chip"><b>Wanted</b>${s.endChapter != null ? `chapters ${s.startChapter || 1}–${s.endChapter}` : s.startChapter ? `from chapter ${s.startChapter}` : "every chapter"}</span>
+          <span class="chip"><b>Wanted</b>${esc(rangesLabel(s.ranges))}</span>
           <span class="chip"><b>Checked</b>${ago(s.lastChecked)}</span>
           <span class="chip"><a href="https://anilist.co/manga/${s.anilistId}" target="_blank" rel="noreferrer">AniList ↗</a></span>
         </div>
@@ -164,18 +179,18 @@ pages.detail = async (id) => {
     const b = e.target.closest("[data-from]");
     if (!b) return;
     b.disabled = true;
-    api(`/series/${id}`, { method: "PATCH", body: { startChapter: Number(b.dataset.from) } }).then(() => (toast(`Getting ${s.title} from chapter ${b.dataset.from}`), pages.detail(id)), fail);
+    api(`/series/${id}`, { method: "PATCH", body: { addRange: { from: Number(b.dataset.from), to: null } } }).then(() => (toast(`Getting ${s.title} from chapter ${b.dataset.from}`), pages.detail(id)), fail);
   });
   $("#mon").onclick = () => api(`/series/${id}`, { method: "PATCH", body: { monitored: !s.monitored } }).then(() => pages.detail(id), fail);
   $("#t-refresh").onclick = () => api(`/series/${id}/refresh`, { method: "POST" }).then(() => toast(`Checking ${s.title}`), fail);
   $("#t-edit").onclick = () =>
     modal(`Edit – ${s.title}`,
       `<label class="row"><span>Monitored</span><input type="checkbox" id="e-mon" ${s.monitored ? "checked" : ""}></label>
-       <label class="row"><span>From chapter</span><input type="number" id="e-start" min="0" step="any" value="${s.startChapter}"></label>
-       <label class="row"><span>Up to chapter</span><input type="number" id="e-end" min="0" step="any" value="${s.endChapter ?? ""}" placeholder="keep following"></label>
-       <p class="muted">From 0 = the whole series; empty "up to" = keep downloading new chapters. Widening the range downloads the chapters it adds; narrowing it only stops downloads outside it (files on disk stay).</p>`,
+       <label class="row"><span>Chapters</span><input type="text" id="e-ranges" value="${esc(rangesText(s.ranges))}" placeholder="0–"></label>
+       <p class="muted">Ranges, comma-separated: <code>1–10, 50–60, 100–</code>. An open end (<code>100–</code>) keeps downloading new chapters; <code>0–</code> is the whole series. Adding chapters downloads them; taking them out only stops downloads (files on disk stay).</p>`,
       [{ label: "Cancel" }, { label: "Save", cls: "primary", onClick: (close, m) =>
-        api(`/series/${id}`, { method: "PATCH", body: { monitored: $("#e-mon", m).checked, startChapter: Number($("#e-start", m).value || 0), endChapter: $("#e-end", m).value === "" ? null : Number($("#e-end", m).value) } })
+        Promise.resolve()
+          .then(() => api(`/series/${id}`, { method: "PATCH", body: { monitored: $("#e-mon", m).checked, ranges: parseRanges($("#e-ranges", m).value) } }))
           .then(() => (close(), pages.detail(id)), fail) }]);
   $("#t-delete").onclick = () =>
     modal(`Delete – ${s.title}`,
@@ -236,7 +251,7 @@ pages.add = async () => {
         if (!b) return;
         const m = r[b.dataset.add];
         b.disabled = true;
-        api("/series", { method: "POST", body: { anilistId: m.anilistId, startChapter: Number($(`[data-start="${b.dataset.add}"]`).value || 0) } })
+        api("/series", { method: "POST", body: { anilistId: m.anilistId, ranges: [{ from: Number($(`[data-start="${b.dataset.add}"]`).value || 0), to: null }] } })
           .then(() => (toast(`${m.title} added, looking for a source`), (location.hash = `#/series/${m.anilistId}`)), (e) => ((b.disabled = false), fail(e)));
       };
     } catch (e) {

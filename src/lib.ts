@@ -72,15 +72,32 @@ export function numberChapters<C extends { id?: number; chapterNumber: number; s
 /** The highest real (source-numbered) chapter, or -1 when there's none. */
 export const latestNumbered = (remote: { chapterNumber: number }[]) => Math.max(-1, ...remote.map((c) => c.chapterNumber));
 
+/** Chapters `from` to `to` (both included); `to` null = every chapter after `from`, new ones too. */
+export type Range = [from: number, to: number | null];
+export const inRanges = (n: number, ranges: Range[]) => ranges.some(([from, to]) => n >= from && (to === null || n <= to));
+/** Sorted, with overlapping ranges joined (1–10 + 5–20 = 1–20); separate ones stay separate (1–10, 50–60). */
+export function mergeRanges(ranges: Range[]): Range[] {
+  const out: Range[] = [];
+  for (const [from, to] of [...ranges].sort((a, b) => a[0] - b[0])) {
+    const last = out.at(-1);
+    if (last && (last[1] === null || from <= last[1])) last[1] = last[1] === null || to === null ? null : Math.max(last[1], to);
+    else out.push([from, to]);
+  }
+  return out;
+}
+/** "1–10, 50–60, from 100" */
+export const rangesLabel = (ranges: Range[]) =>
+  ranges.map(([from, to]) => (to === null ? (from ? `from ${from}` : "every chapter") : from === to ? `${from}` : `${from || 1}–${to}`)).join(", ");
+
 /**
- * Which chapters to download: from the start chapter up to the end one (none: every new one), not on disk yet, one per chapter number (the first
+ * Which chapters to download: the ones in the wanted ranges, not on disk yet, one per chapter number (the first
  * one listed wins, so a second scanlation isn't downloaded too). Run numberChapters first.
  */
-export function pickWanted<C extends { number: number }>(remote: C[], onDisk: Set<number>, start: number, end: number | null = null): C[] {
+export function pickWanted<C extends { number: number }>(remote: C[], onDisk: Set<number>, ranges: Range[]): C[] {
   const seen = new Set<number>();
   return remote.filter((c) => {
     const n = c.number;
-    if (n < start || (end !== null && n > end) || onDisk.has(n) || seen.has(n)) return false;
+    if (!inRanges(n, ranges) || onDisk.has(n) || seen.has(n)) return false;
     seen.add(n);
     return true;
   });

@@ -33,11 +33,11 @@ Mangarr manages the series; [Suwayomi-Server](https://github.com/Suwayomi/Suwayo
 second container) runs the extensions. The extensions are Android code from
 [keiyoushi](https://github.com/keiyoushi/extensions-source), so something Mihon-shaped has to run them, and Suwayomi
 already does that well. Mangarr adds what it doesn't have: knowing a series by its AniList entry, picking and falling
-back between sources, "start from chapter N", and a clean library folder.
+back between sources, chapter ranges ("from chapter N", "1–10, 50–60"), and a clean library folder.
 
 ## Features
 
-- **Series:** poster grid or table with chapter counts per series, monitored on/off, edit the start chapter, change
+- **Series:** poster grid or table with chapter counts per series, monitored on/off, edit which chapters are wanted (ranges like `1–10, 50–60, 100–`), change
   source, delete (optionally with its files). Looks and works like Sonarr/Radarr.
 - **Add New:** search AniList and add a manga, optionally "from chapter N" (say, where the anime ends).
 - **Sources:** install extensions from the keiyoushi list (the same ones Mihon offers) and put them in priority order.
@@ -67,7 +67,7 @@ browser ─────►     │                  │
 
 1. You add a series by its AniList entry. Mangarr searches your sources in priority order with its titles (English,
    romaji, synonyms) and takes the first exact match.
-2. Every 30 minutes it asks the source for the chapter list and queues whatever is missing (from the start chapter on)
+2. Every 30 minutes it asks the source for the chapter list and queues whatever is missing (in the wanted chapter ranges)
    in Suwayomi's downloader.
 3. Finished chapters are moved into the library and Suwayomi's Local source is refreshed, so Mihon and Jellyshelf see
    them straight away.

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bestMatch, chapterFile, loose, numberChapters, pickWanted, safeFolder } from "./lib.ts";
+import { bestMatch, chapterFile, loose, mergeRanges, numberChapters, pickWanted, rangesLabel, safeFolder } from "./lib.ts";
 
 test("bestMatch ignores case, punctuation and accents, and doesn't take near misses", () => {
   const results = [{ title: "Fire Punch Side Story" }, { title: "FIRE PUNCH" }];
@@ -13,11 +13,23 @@ test("bestMatch ignores case, punctuation and accents, and doesn't take near mis
 test("pickWanted: start chapter, on-disk, duplicates across scanlators, decimals", () => {
   const ch = (number: number, scanlator = "A") => ({ number, scanlator });
   const remote = [ch(1), ch(2), ch(2, "B"), ch(2.5), ch(3), ch(4)];
-  const got = pickWanted(remote, new Set([3]), 2);
+  const got = pickWanted(remote, new Set([3]), [[2, null]]);
   assert.deepEqual(got, [ch(2), ch(2.5), ch(4)]);
   // Up to an end chapter: its extras (2.5) are in, the next chapter isn't.
-  assert.deepEqual(pickWanted(remote, new Set(), 1, 2.5), [ch(1), ch(2), ch(2.5)]);
-  assert.deepEqual(pickWanted(remote, new Set(), 2, 2), [ch(2)]);
+  assert.deepEqual(pickWanted(remote, new Set(), [[1, 2.5]]), [ch(1), ch(2), ch(2.5)]);
+  assert.deepEqual(pickWanted(remote, new Set(), [[2, 2]]), [ch(2)]);
+  // Separate ranges: nothing in the gap.
+  assert.deepEqual(pickWanted(remote, new Set(), [[1, 1], [4, null]]), [ch(1), ch(4)]);
+});
+
+test("mergeRanges joins overlaps only, rangesLabel reads them", () => {
+  assert.deepEqual(mergeRanges([[50, 60], [1, 10]]), [[1, 10], [50, 60]]);
+  assert.deepEqual(mergeRanges([[1, 10], [5, 20], [20, 25]]), [[1, 25]]);
+  assert.deepEqual(mergeRanges([[53, null], [1, 10], [60, 70]]), [[1, 10], [53, null]]);
+  assert.deepEqual(mergeRanges([[1, 10], [3, null]]), [[1, null]]);
+  assert.deepEqual(mergeRanges([[10, 11], [11.5, 12]]), [[10, 11], [11.5, 12]]);
+  assert.equal(rangesLabel([[0, 10], [50, 60], [7, 7], [100, null]]), "1–10, 50–60, 7, from 100");
+  assert.equal(rangesLabel([[0, null]]), "every chapter");
 });
 
 const nums = (list: [number, number][]) => numberChapters(list.map(([chapterNumber, sourceOrder]) => ({ chapterNumber, sourceOrder }))).map((c) => c.number);

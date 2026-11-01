@@ -3,7 +3,7 @@ import { join, resolve, sep } from "node:path";
 import * as anilist from "./anilist.ts";
 import * as suwa from "./suwayomi.ts";
 import { allSeries, chaptersOf, config, db, enabledSources, getSeries, log, patchSeries, type Series } from "./db.ts";
-import { bestMatch, chapterFile, latestNumbered, loose, numberChapters, pickWanted, safeFolder } from "./lib.ts";
+import { bestMatch, chapterFile, latestNumbered, loose, numberChapters, pickWanted, safeFolder, inRanges, mergeRanges, rangesLabel, type Range } from "./lib.ts";
 
 const DAY = 86_400;
 const now = () => Math.floor(Date.now() / 1000);
@@ -24,7 +24,7 @@ function serial<T>(anilistId: number, fn: () => Promise<T>): Promise<T> {
 }
 
 /** Add a series by AniList id. Matching and the first download happen in the background. */
-export async function addSeries(anilistId: number, startChapter = 0, endChapter: number | null = null) {
+export async function addSeries(anilistId: number, ranges: Range[] = [[0, null]]) {
   if (getSeries(anilistId)) throw new HttpError(409, "Series already added");
   const m = await anilist.manga(anilistId);
   if (!m) throw new HttpError(404, "Not on AniList");
@@ -32,7 +32,7 @@ export async function addSeries(anilistId: number, startChapter = 0, endChapter:
   let folder = safeFolder(title);
   if (db.prepare("SELECT 1 FROM series WHERE folder = ?").get(folder)) folder = `${folder} (${anilistId})`;
   db.prepare(
-    `INSERT INTO series (anilist_id, title, titles, cover, banner, description, author, genres, year, anilist_status, total, folder, start_chapter)
+    `INSERT INTO series (anilist_id, title, titles, cover, banner, description, author, genres, year, anilist_status, total, folder, ranges)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     anilistId,
@@ -47,10 +47,9 @@ export async function addSeries(anilistId: number, startChapter = 0, endChapter:
     m.status,
     m.chapters,
     folder,
-    startChapter,
+    JSON.stringify(mergeRanges(ranges)),
   );
-  if (endChapter !== null) patchSeries(anilistId, { end_chapter: endChapter });
-  log(`Added ${title} (AniList ${anilistId})${endChapter !== null ? `, chapters ${startChapter}–${endChapter}` : startChapter ? ` from chapter ${startChapter}` : ""}`);
+  log(`Added ${title} (AniList ${anilistId}), ${rangesLabel(mergeRanges(ranges))}`);
   void syncSeries(anilistId).catch((e) => log(`${title}: ${e.message}`));
   return getSeries(anilistId)!;
 }
@@ -213,15 +212,17 @@ async function checkSeries(anilistId: number): Promise<void> {
   const have = chaptersOf(anilistId);
   const onDisk = new Set(have.filter((c) => c.file).map((c) => c.number));
   const known = new Map(have.filter((c) => c.remote_chapter_id && c.source_id === s.source_id).map((c) => [c.remote_chapter_id!, c.number]));
-  const wanted = pickWanted(numberChapters(remote, known), onDisk, s.start_chapter, s.end_chapter);
+  const ranges: Range[] = JSON.parse(s.ranges);
+  const wanted = pickWanted(numberChapters(remote, known), onDisk, ranges);
   const upsert = db.prepare(
     `INSERT INTO chapters (anilist_id, number, name, source_id, remote_chapter_id) VALUES (?, ?, ?, ?, ?)
      ON CONFLICT (anilist_id, number) DO UPDATE SET name = excluded.name, source_id = excluded.source_id, remote_chapter_id = excluded.remote_chapter_id
      WHERE file IS NULL`,
   );
   for (const c of wanted) upsert.run(anilistId, c.number, c.name, s.source_id, c.id);
-  // Wanted rows outside a range that's since been narrowed.
-  db.prepare("DELETE FROM chapters WHERE anilist_id = ? AND file IS NULL AND (number < ? OR number > ?)").run(anilistId, s.start_chapter, s.end_chapter ?? 1e9);
+  // Wanted rows outside ranges that have since been narrowed.
+  const unwant = db.prepare("DELETE FROM chapters WHERE anilist_id = ? AND number = ? AND file IS NULL");
+  for (const c of have) if (!c.file && !inRanges(c.number, ranges)) unwant.run(anilistId, c.number);
   patchSeries(anilistId, { state: "ok", error: null, error_since: null, checked_at: now() });
 
   const inQueue = new Set((await suwa.queue()).queue.map((q) => q.chapter.id));
