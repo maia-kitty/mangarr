@@ -15,6 +15,9 @@ test("pickWanted: start chapter, on-disk, duplicates across scanlators, decimals
   const remote = [ch(1), ch(2), ch(2, "B"), ch(2.5), ch(3), ch(4)];
   const got = pickWanted(remote, new Set([3]), 2);
   assert.deepEqual(got, [ch(2), ch(2.5), ch(4)]);
+  // Up to an end chapter: its extras (2.5) are in, the next chapter isn't.
+  assert.deepEqual(pickWanted(remote, new Set(), 1, 2.5), [ch(1), ch(2), ch(2.5)]);
+  assert.deepEqual(pickWanted(remote, new Set(), 2, 2), [ch(2)]);
 });
 
 const nums = (list: [number, number][]) => numberChapters(list.map(([chapterNumber, sourceOrder]) => ({ chapterNumber, sourceOrder }))).map((c) => c.number);

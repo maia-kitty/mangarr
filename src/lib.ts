@@ -73,14 +73,14 @@ export function numberChapters<C extends { id?: number; chapterNumber: number; s
 export const latestNumbered = (remote: { chapterNumber: number }[]) => Math.max(-1, ...remote.map((c) => c.chapterNumber));
 
 /**
- * Which chapters to download: at or after the start chapter, not on disk yet, one per chapter number (the first
+ * Which chapters to download: from the start chapter up to the end one (none: every new one), not on disk yet, one per chapter number (the first
  * one listed wins, so a second scanlation isn't downloaded too). Run numberChapters first.
  */
-export function pickWanted<C extends { number: number }>(remote: C[], onDisk: Set<number>, start: number): C[] {
+export function pickWanted<C extends { number: number }>(remote: C[], onDisk: Set<number>, start: number, end: number | null = null): C[] {
   const seen = new Set<number>();
   return remote.filter((c) => {
     const n = c.number;
-    if (n < start || onDisk.has(n) || seen.has(n)) return false;
+    if (n < start || (end !== null && n > end) || onDisk.has(n) || seen.has(n)) return false;
     seen.add(n);
     return true;
   });

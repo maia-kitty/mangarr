@@ -5,6 +5,16 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:net";
+
+/** A port nothing listens on (a random one could collide). */
+const freePort = () =>
+  new Promise<number>((ok) => {
+    const s = createServer().listen(0, "127.0.0.1", () => {
+      const { port } = s.address() as { port: number };
+      s.close(() => ok(port));
+    });
+  });
 
 const dir = mkdtempSync(join(tmpdir(), "mangarr-auth-"));
 process.env.MANGARR_CONFIG = dir;
@@ -15,7 +25,7 @@ let base = "";
 /** Start mangarr; `local` says whether 127.0.0.1 counts as a local address. */
 async function start(local: boolean) {
   server?.kill();
-  const port = 30000 + Math.floor(Math.random() * 20000);
+  const port = await freePort();
   base = `http://127.0.0.1:${port}`;
   server = spawn(process.execPath, [new URL("./server.ts", import.meta.url).pathname], {
     env: { ...process.env, MANGARR_CONFIG: dir, MANGARR_PORT: String(port), MANGARR_NO_JOBS: "1", SUWAYOMI_URL: "http://127.0.0.1:1", MANGARR_LOCAL_CIDRS: local ? "127.0.0.0/8" : "192.0.2.0/24" },
@@ -214,7 +224,7 @@ test("forgot the password: delete auth.json, restart, set it up again from a loc
 test("a broken auth.json stops mangarr instead of leaving it open", async () => {
   server?.kill();
   writeFileSync(join(dir, "auth.json"), "{broken");
-  const port = 30000 + Math.floor(Math.random() * 20000);
+  const port = await freePort();
   const p = spawn(process.execPath, [new URL("./server.ts", import.meta.url).pathname], {
     env: { ...process.env, MANGARR_CONFIG: dir, MANGARR_PORT: String(port), MANGARR_NO_JOBS: "1" },
     stdio: "ignore",

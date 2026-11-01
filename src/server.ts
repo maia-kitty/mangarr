@@ -101,6 +101,13 @@ const chapterParam = (v: unknown) => {
   if (!Number.isFinite(n) || n < 0) throw new HttpError(400, "startChapter must be a number ≥ 0");
   return n;
 };
+/** The last chapter wanted: null (or absent) keeps following new ones. */
+const endParam = (v: unknown, start: number) => {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < start) throw new HttpError(400, "endChapter must be a number ≥ startChapter, or null");
+  return n;
+};
 async function proxy(res: ServerResponse, path: string) {
   const r = await suwa.suwayomiGet(path);
   if (!r.ok || !r.body) throw new HttpError(502, `Suwayomi answered ${r.status}`);
@@ -132,6 +139,7 @@ function view(s: Series) {
     folder: s.folder,
     path: `${config.library}/${s.folder}`,
     startChapter: s.start_chapter,
+    endChapter: s.end_chapter,
     monitored: !!s.monitored,
     sourceId: s.source_id,
     sourceName: src?.name ?? null,
@@ -272,7 +280,8 @@ route("GET", "/lookup", async (_q, _r, _p, url) => {
 route("GET", "/series", async () => allSeries().map(view));
 route("POST", "/series", async (req, res) => {
   const b = await readBody(req);
-  const s = await addSeries(intParam(b.anilistId, "anilistId"), chapterParam(b.startChapter));
+  const start = chapterParam(b.startChapter);
+  const s = await addSeries(intParam(b.anilistId, "anilistId"), start, endParam(b.endChapter, start));
   res.statusCode = 201;
   return view(s);
 });
@@ -290,8 +299,13 @@ route("PATCH", "/series/:id", async (req, _r, [id]) => {
     await changeSource(s.anilist_id, String(b.sourceId), intParam(b.mangaId, "mangaId"));
   }
   if (b.monitored !== undefined) patchSeries(s.anilist_id, { monitored: b.monitored ? 1 : 0 });
-  if (b.startChapter !== undefined) patchSeries(s.anilist_id, { start_chapter: chapterParam(b.startChapter) });
-  if (b.monitored !== undefined || b.startChapter !== undefined)
+  if (b.startChapter !== undefined || b.endChapter !== undefined) {
+    const start = b.startChapter === undefined ? s.start_chapter : chapterParam(b.startChapter);
+    const end = b.endChapter === undefined ? s.end_chapter : endParam(b.endChapter, start);
+    if (end !== null && end < start) throw new HttpError(400, "endChapter must be ≥ startChapter");
+    patchSeries(s.anilist_id, { start_chapter: start, end_chapter: end });
+  }
+  if (b.monitored !== undefined || b.startChapter !== undefined || b.endChapter !== undefined)
     void syncSeries(s.anilist_id).catch((e) => log(`${s.title}: ${e.message}`));
   return view(getSeries(s.anilist_id)!);
 });
@@ -307,7 +321,7 @@ route("POST", "/series/:id/refresh", async (_q, _r, [id]) => {
 route("GET", "/series/:id/candidates", async (_q, _r, [id]) => candidates(mustSeries(id).anilist_id));
 /**
  * The series' chapters: on disk and wanted. With ?all=true also the ones the source has that weren't asked for
- * (before the start chapter), as `wanted: false`, from the chapter list Suwayomi already has (no request to the source).
+ * (outside the start–end range), as `wanted: false`, from the chapter list Suwayomi already has (no request to the source).
  */
 route("GET", "/series/:id/chapters", async (_q, _r, [id], url) => {
   const s = mustSeries(id);

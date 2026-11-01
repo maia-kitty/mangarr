@@ -19,7 +19,7 @@ browser (UI) ───────────►      │                      
 | **Jellyshelf** | the frontend for everyone: browse, request, read |
 
 ## Adding a series
-1. `POST /api/v1/series {anilistId, startChapter?}` (or Add New in the UI)
+1. `POST /api/v1/series {anilistId, startChapter?, endChapter?}` (or Add New in the UI)
 2. **Match:** the enabled sources are searched in priority order with the AniList titles (english, romaji, 2 synonyms). A result counts only if its title equals one of the series' names, ignoring case, accents and punctuation. First hit wins. No hit → state `no_match` (retried every sync, so enabling a new source can fix it), or pick one by hand with **Change Source**
    A match whose chapter list is empty doesn't count (MangaDex lists licensed series with no chapters): the next source is tried
 3. **Numbering:** decimal chapters (12.5, 139.2) keep their number. Chapters the source can't number (oneshots, extras, side stories; Suwayomi says `-1`) get the number of the chapter before them + .01 per extra: an extra after chapter 12 is `12.01`, the next `12.02`. A title with no numbered chapters at all (a oneshot) is chapter 1, 2, … The same extra from two scanlators (same name, same gap) is one chapter
@@ -81,8 +81,8 @@ The login (Sonarr's "Forms" authentication):
 | `GET /status` | version, Suwayomi reachable, last sync, API key |
 | `GET /lookup?term=` | AniList manga search (`added` marks the ones already here) |
 | `GET /series` · `GET /series/:id` | series with `chaptersOnDisk`, `chaptersMissing`, `latestChapter`, `state` (`ok`/`no_match`/`error`/`matching`), `sourceName` |
-| `POST /series` `{anilistId, startChapter?}` | add (201) |
-| `PATCH /series/:id` `{monitored?, startChapter?, sourceId?+mangaId?}` | edit; `sourceId` + `mangaId` = change source |
+| `POST /series` `{anilistId, startChapter?, endChapter?}` | add (201); no `endChapter` = keep following new chapters |
+| `PATCH /series/:id` `{monitored?, startChapter?, endChapter?, sourceId?+mangaId?}` | edit; `sourceId` + `mangaId` = change source |
 | `DELETE /series/:id?deleteFiles=true` | remove (the folder too if asked) |
 | `POST /series/:id/refresh` | check that series now |
 | `GET /series/:id/candidates` | search results on every enabled source, for Change Source |
@@ -109,6 +109,7 @@ The login (Sonarr's "Forms" authentication):
 | `public/` | the UI: `index.html`, `app.js` (plain JS, hash routes), `style.css` |
 
 ## Known limits
+- A series wants one range of chapters (`startChapter`–`endChapter`). Two separate ranges (1–10, then 50–60) become one (1–60), and asking for one range of a series that already follows new chapters keeps following them
 - An extra keeps the number it got first. A new extra that shows up *before* an older one in the same gap takes the next free number, so those two sort the wrong way round (nothing is downloaded twice)
 - Matching needs an exact title match, so a source that names a series differently needs **Change Source** once
 - The every-2-days comparison only looks at *other* sources: a second, more complete entry of the same series on the same source isn't found (Change Source can pick it)

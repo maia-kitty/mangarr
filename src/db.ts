@@ -80,6 +80,7 @@ PRAGMA foreign_keys = ON;
 // Columns added after the first release: ALTER the ones an older database lacks.
 const has = (table: string, col: string) => (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === col);
 if (!has("series", "compared_at")) db.exec("ALTER TABLE series ADD COLUMN compared_at INTEGER"); // last check against the other sources
+if (!has("series", "end_chapter")) db.exec("ALTER TABLE series ADD COLUMN end_chapter REAL"); // last chapter wanted; null = keep following new ones
 
 export interface Series {
   anilist_id: number;
@@ -95,6 +96,7 @@ export interface Series {
   total: number | null;
   folder: string;
   start_chapter: number;
+  end_chapter: number | null;
   monitored: number;
   source_id: string | null;
   remote_id: number | null;

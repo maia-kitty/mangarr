@@ -136,7 +136,7 @@ pages.detail = async (id) => {
           <span class="chip"><b>Path</b>${esc(s.path)}</span>
           <span class="chip"><b>Source</b>${esc(s.sourceName ?? "none")}</span>
           <span class="chip"><b>Chapters</b>${s.chaptersOnDisk} on disk${s.chaptersMissing ? `, ${s.chaptersMissing} missing` : ""}${s.totalChapters ? ` (AniList: ${s.totalChapters})` : ""}</span>
-          <span class="chip"><b>From</b>${s.startChapter ? `chapter ${s.startChapter}` : "the start"}</span>
+          <span class="chip"><b>Wanted</b>${s.endChapter != null ? `chapters ${s.startChapter || 1}–${s.endChapter}` : s.startChapter ? `from chapter ${s.startChapter}` : "every chapter"}</span>
           <span class="chip"><b>Checked</b>${ago(s.lastChecked)}</span>
           <span class="chip"><a href="https://anilist.co/manga/${s.anilistId}" target="_blank" rel="noreferrer">AniList ↗</a></span>
         </div>
@@ -171,10 +171,11 @@ pages.detail = async (id) => {
   $("#t-edit").onclick = () =>
     modal(`Edit – ${s.title}`,
       `<label class="row"><span>Monitored</span><input type="checkbox" id="e-mon" ${s.monitored ? "checked" : ""}></label>
-       <label class="row"><span>Start from chapter</span><input type="number" id="e-start" min="0" step="any" value="${s.startChapter}"></label>
-       <p class="muted">0 = the whole series. Lowering it downloads the earlier chapters; raising it only stops new downloads below it (files on disk stay).</p>`,
+       <label class="row"><span>From chapter</span><input type="number" id="e-start" min="0" step="any" value="${s.startChapter}"></label>
+       <label class="row"><span>Up to chapter</span><input type="number" id="e-end" min="0" step="any" value="${s.endChapter ?? ""}" placeholder="keep following"></label>
+       <p class="muted">From 0 = the whole series; empty "up to" = keep downloading new chapters. Widening the range downloads the chapters it adds; narrowing it only stops downloads outside it (files on disk stay).</p>`,
       [{ label: "Cancel" }, { label: "Save", cls: "primary", onClick: (close, m) =>
-        api(`/series/${id}`, { method: "PATCH", body: { monitored: $("#e-mon", m).checked, startChapter: Number($("#e-start", m).value || 0) } })
+        api(`/series/${id}`, { method: "PATCH", body: { monitored: $("#e-mon", m).checked, startChapter: Number($("#e-start", m).value || 0), endChapter: $("#e-end", m).value === "" ? null : Number($("#e-end", m).value) } })
           .then(() => (close(), pages.detail(id)), fail) }]);
   $("#t-delete").onclick = () =>
     modal(`Delete – ${s.title}`,

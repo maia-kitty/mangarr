@@ -24,7 +24,7 @@ function serial<T>(anilistId: number, fn: () => Promise<T>): Promise<T> {
 }
 
 /** Add a series by AniList id. Matching and the first download happen in the background. */
-export async function addSeries(anilistId: number, startChapter = 0) {
+export async function addSeries(anilistId: number, startChapter = 0, endChapter: number | null = null) {
   if (getSeries(anilistId)) throw new HttpError(409, "Series already added");
   const m = await anilist.manga(anilistId);
   if (!m) throw new HttpError(404, "Not on AniList");
@@ -49,7 +49,8 @@ export async function addSeries(anilistId: number, startChapter = 0) {
     folder,
     startChapter,
   );
-  log(`Added ${title} (AniList ${anilistId})${startChapter ? ` from chapter ${startChapter}` : ""}`);
+  if (endChapter !== null) patchSeries(anilistId, { end_chapter: endChapter });
+  log(`Added ${title} (AniList ${anilistId})${endChapter !== null ? `, chapters ${startChapter}–${endChapter}` : startChapter ? ` from chapter ${startChapter}` : ""}`);
   void syncSeries(anilistId).catch((e) => log(`${title}: ${e.message}`));
   return getSeries(anilistId)!;
 }
@@ -212,15 +213,15 @@ async function checkSeries(anilistId: number): Promise<void> {
   const have = chaptersOf(anilistId);
   const onDisk = new Set(have.filter((c) => c.file).map((c) => c.number));
   const known = new Map(have.filter((c) => c.remote_chapter_id && c.source_id === s.source_id).map((c) => [c.remote_chapter_id!, c.number]));
-  const wanted = pickWanted(numberChapters(remote, known), onDisk, s.start_chapter);
+  const wanted = pickWanted(numberChapters(remote, known), onDisk, s.start_chapter, s.end_chapter);
   const upsert = db.prepare(
     `INSERT INTO chapters (anilist_id, number, name, source_id, remote_chapter_id) VALUES (?, ?, ?, ?, ?)
      ON CONFLICT (anilist_id, number) DO UPDATE SET name = excluded.name, source_id = excluded.source_id, remote_chapter_id = excluded.remote_chapter_id
      WHERE file IS NULL`,
   );
   for (const c of wanted) upsert.run(anilistId, c.number, c.name, s.source_id, c.id);
-  // Wanted rows from an earlier start chapter that's since been raised.
-  db.prepare("DELETE FROM chapters WHERE anilist_id = ? AND file IS NULL AND number < ?").run(anilistId, s.start_chapter);
+  // Wanted rows outside a range that's since been narrowed.
+  db.prepare("DELETE FROM chapters WHERE anilist_id = ? AND file IS NULL AND (number < ? OR number > ?)").run(anilistId, s.start_chapter, s.end_chapter ?? 1e9);
   patchSeries(anilistId, { state: "ok", error: null, error_since: null, checked_at: now() });
 
   const inQueue = new Set((await suwa.queue()).queue.map((q) => q.chapter.id));
