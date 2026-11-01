@@ -57,13 +57,27 @@ Every 30 min (`MANGARR_SYNC_MINUTES`) each monitored series is checked again for
 - **Mihon offline:** sync `/mnt/hdd1/media/manga` to the phone (Syncthing, send-only from the server) into Mihon's `local/` folder → Mihon's **Local source** shows the series with cover and description
 
 ## Auth
-- The UI and API need no key from **local addresses**: private ranges, Docker, NetBird (`100.64.0.0/10`), loopback. Change with `MANGARR_LOCAL_CIDRS`
-- Anything else needs `X-Api-Key` (or `?apikey=`). The key is created on first start in `/config/api-key` and shown in Settings → General
+A request gets in with any of:
+- **`X-Api-Key`** (or `?apikey=`): Jellyshelf, scripts. The key is created on first start in `/config/api-key` and shown in Settings → General
+- **A login session** (cookie `mangarr_session`: HttpOnly, SameSite=Strict, 30 days; only its SHA-256 is stored, in the `sessions` table)
+- **A local address** (private ranges, Docker, NetBird `100.64.0.0/10`, loopback; `MANGARR_LOCAL_CIDRS`), but only before a login is set up, or when *Authentication required* is *Disabled for local addresses*
+
+The login (Sonarr's "Forms" authentication):
+- One user in `/config/auth.json` (mode 600): username, scrypt hash (N=2^15, r=8, random salt), `localBypass`. A broken file stops mangarr from starting rather than leaving it open. **Forgot the password:** delete the file, restart, set a new one
+- **First setup** (`POST /auth/setup`) only from a local address or with the API key, and only while there's no login. The UI won't show anything else until it's done
+- **Brute force:** per address (an IPv6 /64 counts as one), 5 wrong passwords, then a lockout of 30 s that doubles on every further miss, up to 1 h; the count is forgotten after a quiet day and cleared by a right password. A try counts *before* the password is checked, so parallel guesses can't slip past, and during a lockout even the right password gets 429 + `Retry-After`. At most 4 hashes run at once (each takes 32 MiB). Wrong passwords and lockouts go to the log with the address
+- A wrong username costs the same time as a wrong password (the hash always runs), and username/password compares are constant-time
+- **Changing the login** (`PUT /auth`) always needs the current password (also from a local address that needs no login) and is under the same lockout. A new username or password ends every other session; this browser gets a new one
+- **Cross-site requests:** non-GET requests whose `Origin` isn't this host get 403. The UI can't be put in a frame
+- Behind a reverse proxy every request comes from the proxy's address, so the lockout is shared: someone guessing locks you out of the login too (sessions and the API key keep working). `X-Forwarded-For` isn't trusted, since anyone can send it. `X-Forwarded-Proto: https` adds `Secure` to the cookie
 - Suwayomi's port is open for Mihon, so it runs with basic auth (`AUTH_MODE=basic_auth`); mangarr sends the same credentials (`SUWAYOMI_USER` / `SUWAYOMI_PASS`)
 
 ## API (`/api/v1`)
 | Route | Does |
 |---|---|
+| `GET /auth` | `{configured, allowed, username, loggedIn, localBypass, local}` (no login needed) |
+| `POST /auth/setup` `{username, password, localBypass?}` · `POST /auth/login` `{username, password}` · `POST /auth/logout` | no login needed; login/setup set the session cookie |
+| `PUT /auth` `{currentPassword, username?, newPassword?, localBypass?}` | change the login |
 | `GET /status` | version, Suwayomi reachable, last sync, API key |
 | `GET /lookup?term=` | AniList manga search (`added` marks the ones already here) |
 | `GET /series` · `GET /series/:id` | series with `chaptersOnDisk`, `chaptersMissing`, `latestChapter`, `state` (`ok`/`no_match`/`error`/`matching`), `sourceName` |
@@ -85,7 +99,8 @@ Every 30 min (`MANGARR_SYNC_MINUTES`) each monitored series is checked again for
 ## Code
 | File | What |
 |---|---|
-| `src/server.ts` | HTTP routes, auth, static UI, start-up + timers |
+| `src/server.ts` | HTTP routes, the auth gate, static UI, start-up + timers |
+| `src/auth.ts` | login file, password hashing, sessions, brute-force lockout; attacked in `auth.test.ts` (a real server on a throwaway config) |
 | `src/sync.ts` | add/delete, matching, wanted chapters, import (moving files), fallback |
 | `src/suwayomi.ts` | Suwayomi GraphQL calls (names checked against v2.4) |
 | `src/anilist.ts` | AniList queries |

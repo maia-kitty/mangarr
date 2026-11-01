@@ -92,7 +92,7 @@ td.num { width: 70px; color: var(--white); }
 .btn.danger { background: var(--red); border-color: var(--red); color: #fff; }
 .btn.small { padding: 2px 8px; font-size: 12px; }
 .btn:disabled { opacity: .5; cursor: default; }
-input[type=text], input[type=number], input[type=search].field, select { background: #1e1e1e; border: 1px solid #444; border-radius: 4px; padding: 6px 10px; color: var(--white); }
+input[type=text], input[type=password], input[type=number], input[type=search].field, select { background: #1e1e1e; border: 1px solid #444; border-radius: 4px; padding: 6px 10px; color: var(--white); }
 input:focus, select:focus { outline: none; border-color: var(--accent); }
 label.row { display: flex; align-items: center; gap: 12px; margin: 10px 0; }
 label.row > span:first-child { width: 160px; color: var(--muted); }
@@ -146,3 +146,14 @@ code, .mono { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 
   .posters { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
   .keybox input { width: 100%; }
 }
+
+/* login */
+.logout { margin-left: auto; }
+body.locked .topbar > :not(.brand), body.locked .sidebar { display: none; }
+body.locked main { margin-left: 0; }
+.login { max-width: 380px; margin: 10vh auto 0; }
+.login label { display: block; margin-bottom: 12px; color: var(--muted); }
+.login input, .login select { display: block; width: 100%; margin-top: 4px; }
+.login .btn { width: 100%; padding: 8px; }
+.login .err-box:empty { display: none; }
+.auth-form input[type=password], .auth-form input[type=text] { width: 320px; max-width: 100%; }

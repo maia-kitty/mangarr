@@ -1,4 +1,4 @@
-// Mangarr UI: plain JS, hash routes, talks to /api/v1 (no key needed from local addresses).
+// Mangarr UI: plain JS, hash routes, talks to /api/v1 (logged in with a session cookie, or from a local address).
 "use strict";
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -27,6 +27,8 @@ async function api(path, opts = {}) {
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   const body = res.headers.get("content-type")?.includes("json") ? await res.json() : null;
+  // Session ran out or was logged out elsewhere: back to the login screen.
+  if (res.status === 401 && body?.login && !path.startsWith("/auth")) showLogin();
   if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
   return body;
 }
@@ -246,7 +248,16 @@ pages.add = async () => {
 
 pages.queue = async () => {
   page.innerHTML = `<div class="toolbar">${tb("t-refresh", "⟳", "Refresh")}</div><div class="content" id="q"></div>`;
-  $("#t-refresh").onclick = () => route();
+  $("#t-refresh").onclick = () => /** Log in, or set the login up, before showing anything. */
+async function boot() {
+  const me = await api("/auth");
+  $("#logout").hidden = !me.loggedIn;
+  if (!me.allowed && me.configured) return showLogin();
+  if (!me.allowed) return void (page.innerHTML = `<div class="content"><div class="err-box">Open Mangarr from a local address to set up its login.</div></div>`);
+  if (!me.configured) return showSetup();
+  route();
+}
+boot().catch((e) => (page.innerHTML = `<div class="content"><div class="err-box">${esc(e.message)}</div></div>`));
   every(3000, async () => {
     const q = await api("/queue").catch((e) => ({ error: e.message, items: [] }));
     if (!$("#q")) return;
@@ -355,13 +366,38 @@ pages.sources = async () => {
 };
 
 pages.general = async () => {
-  const s = await api("/status");
+  const [s, me] = await Promise.all([api("/status"), api("/auth")]);
   const row = (k, v) => `<label class="row"><span>${k}</span><code>${esc(v)}</code></label>`;
-  page.innerHTML = `<div class="content"><div class="card"><h2>Security</h2>
+  page.innerHTML = `<div class="content"><form class="card auth-form" id="g-auth" autocomplete="off"><h2>Login</h2>
+      <label class="row"><span>Username</span><input type="text" id="g-user" value="${esc(me.username ?? "")}" autocomplete="username"></label>
+      <label class="row"><span>Authentication required</span>${REQUIRED}</label>
+      <label class="row"><span>New password</span><input type="password" id="g-pass" autocomplete="new-password" placeholder="leave empty to keep it"></label>
+      <label class="row"><span>Confirm new password</span><input type="password" id="g-pass2" autocomplete="new-password"></label>
+      <label class="row"><span>Current password</span><input type="password" id="g-cur" autocomplete="current-password" required></label>
+      <p class="muted">A new username or password logs out every other browser. Forgot it? Delete <code>/config/auth.json</code>, restart Mangarr and set a new one from a local address.</p>
+      <div class="actions"><button class="btn primary">Save</button>${me.loggedIn ? `<button type="button" class="btn" id="g-logout">Log out</button>` : ""}</div></form>
+    <div class="card"><h2>Security</h2>
       <label class="row"><span>API key</span><span class="keybox"><input type="text" id="key" readonly value="${esc(s.apiKey)}" aria-label="API key"><button class="btn small" id="copy">Copy</button></span></label>
-      <p class="muted">Jellyshelf (or anything not on a local address) sends this as <code>X-Api-Key</code>. Local addresses (LAN, Docker, NetBird) need no key. Stored in <code>/config/api-key</code>.</p></div>
+      <p class="muted">Jellyshelf and scripts send this as <code>X-Api-Key</code> instead of logging in. Stored in <code>/config/api-key</code>.</p></div>
     <div class="card"><h2>Paths and services</h2><p class="muted">Set through environment variables in the compose file.</p>
       ${row("Library", s.library)}${row("Downloads (Suwayomi)", s.downloads)}${row("Suwayomi", s.suwayomiUrl)}${row("Check for new chapters", `every ${s.syncMinutes} min`)}</div></div>`;
+  $("#a-bypass").value = String(!!me.localBypass);
+  $("#g-logout") && ($("#g-logout").onclick = () => $("#logout").click());
+  $("#g-auth").onsubmit = async (e) => {
+    e.preventDefault();
+    if ($("#g-pass").value !== $("#g-pass2").value) return toast("The new passwords don't match", true);
+    const b = $("#g-auth .btn.primary");
+    b.disabled = true;
+    try {
+      await api("/auth", { method: "PUT", body: { currentPassword: $("#g-cur").value, username: $("#g-user").value, newPassword: $("#g-pass").value, localBypass: $("#a-bypass").value === "true" } });
+      toast("Login saved");
+      route();
+    } catch (err) {
+      fail(err);
+    } finally {
+      b.disabled = false;
+    }
+  };
   $("#copy").onclick = () => {
     $("#key").select();
     // Clipboard API needs https; plain-http LAN pages fall back to execCommand.
@@ -381,10 +417,63 @@ pages.status = async () => {
 
 pages.logs = async () => {
   page.innerHTML = `<div class="toolbar">${tb("t-refresh", "⟳", "Refresh")}</div><div class="content"><div class="logs mono" id="logs"></div></div>`;
-  $("#t-refresh").onclick = () => route();
+  $("#t-refresh").onclick = () => /** Log in, or set the login up, before showing anything. */
+async function boot() {
+  const me = await api("/auth");
+  $("#logout").hidden = !me.loggedIn;
+  if (!me.allowed && me.configured) return showLogin();
+  if (!me.allowed) return void (page.innerHTML = `<div class="content"><div class="err-box">Open Mangarr from a local address to set up its login.</div></div>`);
+  if (!me.configured) return showSetup();
+  route();
+}
+boot().catch((e) => (page.innerHTML = `<div class="content"><div class="err-box">${esc(e.message)}</div></div>`));
   const l = await api("/log");
   $("#logs").textContent = l.join("\n") || "Empty";
 };
+
+// ---------- login ----------
+const REQUIRED = `<select id="a-bypass"><option value="false">Enabled</option><option value="true">Disabled for local addresses</option></select>`;
+/** The login (or first-time setup) form instead of the app. */
+function lockScreen(title, fields, submit, onSubmit) {
+  clearTimeout(poll);
+  document.body.classList.add("locked");
+  page.innerHTML = `<form class="card login" id="a-form" novalidate><h2>${esc(title)}</h2>${fields}
+    <div class="err-box" id="a-err" role="alert"></div><button class="btn primary">${esc(submit)}</button></form>`;
+  $("#a-form input")?.focus();
+  $("#a-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const b = $("#a-form button");
+    b.disabled = true;
+    $("#a-err").textContent = "";
+    try {
+      await onSubmit();
+      document.body.classList.remove("locked");
+      await boot();
+    } catch (err) {
+      $("#a-err").textContent = err.message;
+    } finally {
+      b.disabled = false;
+    }
+  };
+}
+function showLogin() {
+  if (document.body.classList.contains("locked")) return;
+  lockScreen("Log in", `<label>Username<input type="text" id="a-user" autocomplete="username" required></label>
+    <label>Password<input type="password" id="a-pass" autocomplete="current-password" required></label>`, "Log in",
+    () => api("/auth/login", { method: "POST", body: { username: $("#a-user").value, password: $("#a-pass").value } }));
+}
+function showSetup() {
+  lockScreen("Set up a login", `<p class="muted">Mangarr needs a username and password for its web UI. Jellyshelf and scripts keep using the API key.</p>
+    <label>Username<input type="text" id="a-user" autocomplete="username" required></label>
+    <label>Password<input type="password" id="a-pass" autocomplete="new-password" minlength="8" required></label>
+    <label>Confirm password<input type="password" id="a-pass2" autocomplete="new-password" required></label>
+    <label>Authentication required${REQUIRED}</label>`, "Save",
+    () => {
+      if ($("#a-pass").value !== $("#a-pass2").value) throw new Error("The passwords don't match");
+      return api("/auth/setup", { method: "POST", body: { username: $("#a-user").value, password: $("#a-pass").value, localBypass: $("#a-bypass").value === "true" } });
+    });
+}
+$("#logout").onclick = () => api("/auth/logout", { method: "POST" }).then(() => location.reload(), fail);
 
 // ---------- router ----------
 const table = [
@@ -414,11 +503,20 @@ async function route() {
     page.innerHTML = `<div class="content"><div class="err-box">${esc(e.message)}</div></div>`;
   }
 }
-window.addEventListener("hashchange", route);
+window.addEventListener("hashchange", () => !document.body.classList.contains("locked") && route());
 $("#burger").onclick = () => $("#sidebar").classList.toggle("show");
 let st;
 $("#search").oninput = () => {
   clearTimeout(st);
   st = setTimeout(() => (location.hash === "" || location.hash === "#/" ? pages.series() : (location.hash = "#/")), 200);
 };
-route();
+/** Log in, or set the login up, before showing anything. */
+async function boot() {
+  const me = await api("/auth");
+  $("#logout").hidden = !me.loggedIn;
+  if (!me.allowed && me.configured) return showLogin();
+  if (!me.allowed) return void (page.innerHTML = `<div class="content"><div class="err-box">Open Mangarr from a local address to set up its login.</div></div>`);
+  if (!me.configured) return showSetup();
+  route();
+}
+boot().catch((e) => (page.innerHTML = `<div class="content"><div class="err-box">${esc(e.message)}</div></div>`));

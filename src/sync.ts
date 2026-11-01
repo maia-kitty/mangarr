@@ -382,8 +382,10 @@ async function writeSeriesInfo(s: Series, dir: string) {
 
 export class HttpError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  headers?: Record<string, string>;
+  constructor(status: number, message: string, headers?: Record<string, string>) {
     super(message);
     this.status = status;
+    this.headers = headers;
   }
 }

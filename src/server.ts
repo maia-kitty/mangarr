@@ -5,13 +5,14 @@ import { Readable } from "node:stream";
 import { timingSafeEqual } from "node:crypto";
 import * as anilist from "./anilist.ts";
 import * as suwa from "./suwayomi.ts";
+import * as auth from "./auth.ts";
 import { allSeries, apiKey, chaptersOf, config, db, enabledSources, getSeries, log, patchSeries, recentLog, type Series } from "./db.ts";
 import { numberChapters } from "./lib.ts";
 import { addSeries, candidates, changeSource, deleteSeries, HttpError, importDownloaded, status, syncAll, syncSeries } from "./sync.ts";
 
 const VERSION = "0.1.0";
 
-// ---------- auth: local addresses need no key, like the rest of the arr stack ----------
+// ---------- auth: the API key, a login session, or (until a login is set, or if it allows it) a local address ----------
 const local = new BlockList();
 for (const cidr of config.localCidrs) {
   const [net, bits] = cidr.split("/");
@@ -26,6 +27,46 @@ function keyOk(req: IncomingMessage) {
   const given = Buffer.from(String(req.headers["x-api-key"] ?? new URL(req.url!, "http://x").searchParams.get("apikey") ?? ""));
   const want = Buffer.from(apiKey);
   return given.length === want.length && timingSafeEqual(given, want);
+}
+function allowed(req: IncomingMessage) {
+  if (keyOk(req)) return true;
+  const login = auth.getLogin();
+  if (!login || login.localBypass) if (isLocal(req.socket.remoteAddress)) return true;
+  return !!auth.sessionUser(auth.cookieToken(req.headers.cookie));
+}
+/** A request from another site's page (cross-site request forgery): browsers always send Origin on those. */
+function foreign(req: IncomingMessage) {
+  const o = req.headers.origin;
+  if (!o || req.method === "GET" || req.method === "HEAD") return false;
+  try {
+    return new URL(o).host !== req.headers.host;
+  } catch {
+    return true;
+  }
+}
+function setSession(req: IncomingMessage, res: ServerResponse, token: string | null) {
+  const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
+  res.setHeader(
+    "Set-Cookie",
+    `${auth.COOKIE}=${token ?? ""}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${token ? auth.SESSION_DAYS * 86400 : 0}${secure}`,
+  );
+}
+/** Count a password try against this address; throws 429 while it's locked out. Returns a function to report the result. */
+async function guarded(req: IncomingMessage, check: () => Promise<boolean>) {
+  const addr = req.socket.remoteAddress;
+  const wait = auth.lockedFor(addr);
+  if (wait) throw new HttpError(429, `Too many wrong passwords, try again in ${wait} s`, { "Retry-After": String(wait) });
+  auth.attempt(addr);
+  let ok: boolean;
+  try {
+    ok = await check();
+  } catch (e) {
+    if (e instanceof auth.Busy) throw new HttpError(429, e.message, { "Retry-After": "1" });
+    throw e;
+  }
+  if (ok) auth.succeeded(addr);
+  else log(`Wrong password from ${addr}${auth.lockedFor(addr) ? `, locked out for ${auth.lockedFor(addr)} s` : ""}`);
+  return ok;
 }
 
 // ---------- helpers ----------
@@ -119,6 +160,51 @@ async function chapterPages(s: Series, number: number) {
 
 let extCache: { at: number; list: suwa.Extension[] } | null = null;
 
+// ---------- login routes (reachable without being logged in) ----------
+async function authRoute(req: IncomingMessage, res: ServerResponse, path: string): Promise<unknown> {
+  const login = auth.getLogin();
+  const token = auth.cookieToken(req.headers.cookie);
+  if (path === "/api/v1/auth" && req.method === "GET") {
+    const ok = allowed(req);
+    return {
+      configured: !!login,
+      allowed: ok,
+      // A local address that needs no login still sees the username (for Settings), but has no session to log out of.
+      username: ok ? (login?.username ?? null) : null,
+      loggedIn: !!auth.sessionUser(token),
+      localBypass: ok ? (login?.localBypass ?? null) : null,
+      local: isLocal(req.socket.remoteAddress),
+    };
+  }
+  if (req.method !== "POST") throw new HttpError(405, "Use POST");
+  const b = await readBody(req);
+  if (path === "/api/v1/auth/login") {
+    if (!login) throw new HttpError(409, "No login set up yet");
+    if (!(await guarded(req, () => auth.verify(b.username, b.password)))) throw new HttpError(401, "Wrong username or password");
+    setSession(req, res, auth.newSession(login.username));
+    log(`${login.username} logged in from ${req.socket.remoteAddress}`);
+    return { ok: true };
+  }
+  if (path === "/api/v1/auth/logout") {
+    auth.endSession(token);
+    setSession(req, res, null);
+    return { ok: true };
+  }
+  if (path === "/api/v1/auth/setup") {
+    if (login) throw new HttpError(409, "A login is already set; change it in Settings → General");
+    // Whoever reaches it first would own it: only from a local address, or with the API key.
+    if (!isLocal(req.socket.remoteAddress) && !keyOk(req)) throw new HttpError(403, "Set up the login from a local address (or with the API key)");
+    const why = auth.invalid(b.username, b.password);
+    if (why) throw new HttpError(400, why);
+    const username = (b.username as string).trim();
+    auth.saveLogin({ username, hash: await auth.hashPassword(b.password as string), localBypass: b.localBypass === true });
+    setSession(req, res, auth.newSession(username));
+    log(`Login set up for ${username}`);
+    return { ok: true };
+  }
+  throw new HttpError(404, "Not found");
+}
+
 // ---------- routes ----------
 type Handler = (req: IncomingMessage, res: ServerResponse, p: string[], url: URL) => Promise<unknown>;
 const routes: [string, RegExp, Handler][] = [];
@@ -137,6 +223,32 @@ route("GET", "/status", async () => ({
   syncMinutes: config.syncMinutes,
 }));
 route("GET", "/log", async () => recentLog());
+// Change the login: always needs the current password, even from a local address that needs no login.
+route("PUT", "/auth", async (req, res) => {
+  const login = auth.getLogin();
+  if (!login) throw new HttpError(409, "No login set up yet");
+  const b = await readBody(req);
+  if (typeof b.currentPassword !== "string" || !(await guarded(req, () => auth.verify(login.username, b.currentPassword))))
+    throw new HttpError(401, "Current password is wrong");
+  const username = b.username === undefined ? login.username : b.username;
+  const password = b.newPassword === undefined || b.newPassword === "" ? null : b.newPassword;
+  if (b.localBypass !== undefined && typeof b.localBypass !== "boolean") throw new HttpError(400, "localBypass must be true or false");
+  const why = auth.invalid(username, password ?? "x".repeat(auth.PASSWORD_MIN));
+  if (why) throw new HttpError(400, why);
+  const next = {
+    username: (username as string).trim(),
+    hash: password === null ? login.hash : await auth.hashPassword(password as string),
+    localBypass: (b.localBypass as boolean | undefined) ?? login.localBypass,
+  };
+  auth.saveLogin(next);
+  // New username or password: every other browser has to log in again; this one stays in.
+  if (next.username !== login.username || password !== null) {
+    auth.endAllSessions();
+    setSession(req, res, auth.newSession(next.username));
+    log(`Login changed for ${next.username}, other sessions logged out`);
+  }
+  return { ok: true };
+});
 
 route("GET", "/lookup", async (_q, _r, _p, url) => {
   const term = url.searchParams.get("term")?.trim();
@@ -326,7 +438,7 @@ async function serveStatic(res: ServerResponse, path: string) {
   if (!/^[\w-]+\.(html|js|css|svg)$/.test(name)) return false;
   const body = await readFile(new URL(name, PUBLIC)).catch(() => null);
   if (!body) return false;
-  res.writeHead(200, { "Content-Type": `${TYPES[name.split(".").pop()!]}; charset=utf-8`, "Cache-Control": "no-cache" });
+  res.writeHead(200, { "Content-Type": `${TYPES[name.split(".").pop()!]}; charset=utf-8`, "Cache-Control": "no-cache", "X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'" });
   res.end(body);
   return true;
 }
@@ -338,7 +450,10 @@ const server = createServer(async (req, res) => {
       if (req.method === "GET" && (await serveStatic(res, url.pathname))) return;
       return json(res, 404, { error: "Not found" });
     }
-    if (!isLocal(req.socket.remoteAddress) && !keyOk(req)) return json(res, 401, { error: "API key required (X-Api-Key)" });
+    if (foreign(req)) return json(res, 403, { error: "Cross-site request refused" });
+    if (url.pathname.startsWith("/api/v1/auth/") || (url.pathname === "/api/v1/auth" && req.method === "GET"))
+      return json(res, 200, await authRoute(req, res, url.pathname));
+    if (!allowed(req)) return json(res, 401, { error: auth.getLogin() ? "Log in, or send the API key (X-Api-Key)" : "API key required (X-Api-Key)", login: !!auth.getLogin() });
     for (const [method, re, h] of routes) {
       const m = req.method === method && re.exec(url.pathname);
       if (!m) continue;
@@ -350,6 +465,7 @@ const server = createServer(async (req, res) => {
   } catch (e) {
     const code = e instanceof HttpError ? e.status : 500;
     if (code === 500) log(`${req.method} ${url.pathname}: ${(e as Error).message}`);
+    if (e instanceof HttpError && e.headers) for (const [k, v] of Object.entries(e.headers)) res.setHeader(k, v);
     if (!res.headersSent) json(res, code, { error: (e as Error).message });
     else res.destroy();
   }

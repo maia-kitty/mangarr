@@ -20,8 +20,8 @@
 > - **It's tested on my setup, not yours.** One Debian server, Suwayomi-Server v2.4, a handful of English sources
 >   (MangaPill, Weeb Central, MangaDex, Asura Scans, MangaFire, Toonily, Flame Comics). Other sources, languages and
 >   Suwayomi versions may behave differently.
-> - **It's built for a home network.** The UI and API need no login from local addresses (LAN, Docker, VPN ranges),
->   the same way I run the rest of my *arr stack. Don't expose it to the internet as it is.
+> - **It's built for a home network.** The web UI has a login (with brute-force lockout), but there's no HTTPS of its
+>   own and it hasn't been audited. Keep it on your LAN or VPN, or behind a reverse proxy with HTTPS.
 > - **Sources change all the time.** The extensions scrape third-party websites; when a site changes or disappears, a
 >   series can stop updating until the extension is fixed or you switch it to another source.
 > - **Expect rough edges and breaking changes** without warning or migration paths. Issues and ideas are welcome, but
@@ -99,11 +99,15 @@ instance; Mangarr turns it on in Suwayomi. None of the sources above needed it i
 
 ### Data and access
 
-All of Mangarr's state lives in `/config`: the SQLite database (`mangarr.db`) and the API key (`api-key`, also shown
-in Settings → General). Suwayomi keeps its own data (installed extensions, its library) in its own volume.
+All of Mangarr's state lives in `/config`: the SQLite database (`mangarr.db`), the API key (`api-key`, also shown
+in Settings → General) and the login (`auth.json`). Suwayomi keeps its own data (installed extensions, its library) in
+its own volume.
 
-Requests from local addresses (private ranges, Docker, `100.64.0.0/10` for Tailscale/NetBird, loopback) need no key;
-change the list with `MANGARR_LOCAL_CIDRS`. Anything else has to send `X-Api-Key`. Suwayomi's port is open for Mihon,
+The first time you open the web UI it asks you to set a username and password (only from a local address: private
+ranges, Docker, `100.64.0.0/10` for Tailscale/NetBird, loopback; change the list with `MANGARR_LOCAL_CIDRS`). Like
+Sonarr, **Authentication required** can be *Enabled* (always log in) or *Disabled for local addresses*. Change the
+login or log out in Settings → General. Forgot the password? Delete `/config/auth.json`, restart, and set a new one.
+Jellyshelf and scripts don't log in: they send `X-Api-Key`. Suwayomi's port is open for Mihon,
 so run it with basic auth (`AUTH_MODE=basic_auth`) and give Mangarr the same login (`SUWAYOMI_USER`/`SUWAYOMI_PASS`).
 
 The container runs as 1000:1000 (`user:` in the compose file).
